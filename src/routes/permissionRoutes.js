@@ -14,12 +14,16 @@ const { protect, authorize } = require('../middlewares/auth');
 
 // All routes here are prefixed with /api/v1/permission-management
 // And should be restricted to SuperAdmin
+// All routes here are prefixed with /api/v1/permission-management
 router.use(protect);
+
+// Public-ish routes (Authenticated Admins/SuperAdmins need these for Dashboard)
+router.get('/get-all-permissions', authorize('SuperAdmin', 'Admin'), getAllPermissions);
+router.get('/users/:id', authorize('SuperAdmin', 'Admin'), getUserPermissions);
+
+// Restricted routes (SuperAdmin only)
 router.use(authorize('SuperAdmin'));
 
-router.get('/get-all-permissions', getAllPermissions);
-
-router.get('/users/:id', getUserPermissions);
 router.put('/users/:id', updateUserPermission);
 router.post('/users/:id/grant', grantUserPermission);
 router.post('/users/:id/revoke', revokeUserPermission);

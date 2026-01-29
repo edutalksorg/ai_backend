@@ -117,46 +117,52 @@ const getAllCoupons = async (req, res) => {
 };
 
 // @desc    Create a new coupon
-// @route   POST /api/v1/admin/coupons
+// @route   POST /api/v1/coupons
 // @access  Private (Admin/SuperAdmin)
 const createCoupon = async (req, res) => {
     try {
-        const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser } = req.body;
+        const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount } = req.body;
+
+        // Ensure date is formatted for MySQL (YYYY-MM-DD HH:MM:SS)
+        const formattedDate = expiryDate ? new Date(expiryDate).toISOString().slice(0, 19).replace('T', ' ') : null;
 
         const [result] = await pool.query(
-            'INSERT INTO coupons (code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [code, description, discountType, discountValue, expiryDate, status || 'Active', applicableTo || 'AllSubscriptions', maxTotalUsage || 1000, maxUsagePerUser || 1]
+            'INSERT INTO coupons (code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [code, description, discountType, discountValue, formattedDate, status || 'Active', applicableTo || 'AllSubscriptions', maxTotalUsage || 1000, maxUsagePerUser || 1, maxDiscountAmount || 0, minimumPurchaseAmount || 0]
         );
 
         res.status(201).json({ success: true, data: { id: result.insertId, code } });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.sqlMessage || error.message });
     }
 };
 
 // @desc    Update a coupon
-// @route   PUT /api/v1/admin/coupons/:id
+// @route   PUT /api/v1/coupons/:id
 // @access  Private (Admin/SuperAdmin)
 const updateCoupon = async (req, res) => {
     try {
-        const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser } = req.body;
+        const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount } = req.body;
         const couponId = req.params.id;
 
+        // Ensure date is formatted for MySQL (YYYY-MM-DD HH:MM:SS)
+        const formattedDate = expiryDate ? new Date(expiryDate).toISOString().slice(0, 19).replace('T', ' ') : null;
+
         await pool.query(
-            'UPDATE coupons SET code=?, description=?, discountType=?, discountValue=?, expiryDate=?, status=?, applicableTo=?, maxTotalUsage=?, maxUsagePerUser=? WHERE id=?',
-            [code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, couponId]
+            'UPDATE coupons SET code=?, description=?, discountType=?, discountValue=?, expiryDate=?, status=?, applicableTo=?, maxTotalUsage=?, maxUsagePerUser=?, maxDiscountAmount=?, minimumPurchaseAmount=? WHERE id=?',
+            [code, description, discountType, discountValue, formattedDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount || 0, minimumPurchaseAmount || 0, couponId]
         );
 
         res.json({ success: true, message: 'Coupon updated successfully' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.sqlMessage || error.message });
     }
 };
 
 // @desc    Delete a coupon
-// @route   DELETE /api/v1/admin/coupons/:id
+// @route   DELETE /api/v1/coupons/:id
 // @access  Private (Admin/SuperAdmin)
 const deleteCoupon = async (req, res) => {
     try {
@@ -198,19 +204,6 @@ const deleteUser = async (req, res) => {
         console.error(error);
         res.status(500).json({ message: 'Server error' });
     }
-};
-
-module.exports = {
-    getAllUsers,
-    reviewInstructor,
-    getDashboardStats,
-    getAllCoupons,
-    createCoupon,
-    updateCoupon,
-    deleteCoupon,
-    createUser,
-    deleteUser,
-    updateUser
 };
 
 // @desc    Update a user (Admin/SuperAdmin)
@@ -260,3 +253,15 @@ const updateUser = async (req, res) => {
     }
 };
 
+module.exports = {
+    getAllUsers,
+    reviewInstructor,
+    getDashboardStats,
+    getAllCoupons,
+    createCoupon,
+    updateCoupon,
+    deleteCoupon,
+    createUser,
+    deleteUser,
+    updateUser
+};

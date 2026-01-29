@@ -24,7 +24,8 @@ const {
     updateCoupon,
     deleteCoupon,
     createUser,
-    deleteUser
+    deleteUser,
+    updateUser
 } = require('../controllers/adminController');
 const { submitQuiz, getQuizAttempts, getAttemptDetails } = require('../controllers/quizAttemptController');
 const {
@@ -99,10 +100,11 @@ router.post('/admin/instructors/:id/review', protect, authorize('Admin', 'SuperA
 router.get('/admin/analytics/dashboard', protect, authorize('Admin', 'SuperAdmin'), getDashboardStats);
 
 // Coupon routes
-router.get('/admin/coupons', protect, authorize('Admin', 'SuperAdmin'), getAllCoupons);
-router.post('/admin/coupons', protect, authorize('Admin', 'SuperAdmin'), createCoupon);
-router.put('/admin/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), updateCoupon);
-router.delete('/admin/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), deleteCoupon);
+// Coupon routes
+router.get('/coupons', protect, authorize('Admin', 'SuperAdmin'), getAllCoupons);
+router.post('/coupons', protect, authorize('Admin', 'SuperAdmin'), createCoupon);
+router.put('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), updateCoupon);
+router.delete('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), deleteCoupon);
 
 // Super Admin routes (RBAC)
 router.get('/superadmin/permissions', protect, authorize('SuperAdmin'), getAllPermissions);

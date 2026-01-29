@@ -20,14 +20,101 @@ const getPlans = async (req, res) => {
 // @access  Private (Admin)
 const createPlan = async (req, res) => {
     try {
-        const { name, description, price, currency, billingCycle, features, isActive } = req.body;
+        const { name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline } = req.body;
 
         const [result] = await pool.query(
-            'INSERT INTO plans (name, description, price, currency, billingCycle, features, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [name, description, price, currency || 'INR', billingCycle, JSON.stringify(features || {}), isActive || true]
+            'INSERT INTO plans (name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [name, description, price, currency || 'INR', billingCycle, JSON.stringify(features || {}), isActive || true, displayOrder || 0, trialDays || 0, isMostPopular || false, marketingTagline || '']
         );
 
         res.status(201).json({ success: true, data: { id: result.insertId, name } });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Update a plan (Admin)
+// @route   PUT /api/v1/subscriptions/plans/:id
+// @access  Private (Admin)
+const updatePlan = async (req, res) => {
+    try {
+        const { name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline } = req.body;
+        const planId = req.params.id;
+
+        // Fetch existing features if not provided
+        let featuresToUpdate = features;
+        if (features === undefined) {
+            const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [planId]);
+            if (rows.length > 0) {
+                featuresToUpdate = JSON.parse(rows[0].features || '{}');
+            }
+        }
+
+        await pool.query(
+            'UPDATE plans SET name=?, description=?, price=?, currency=?, billingCycle=?, features=?, isActive=?, displayOrder=?, trialDays=?, isMostPopular=?, marketingTagline=? WHERE id=?',
+            [name, description, price, currency, billingCycle, JSON.stringify(featuresToUpdate || {}), isActive, displayOrder, trialDays, isMostPopular, marketingTagline, planId]
+        );
+
+        res.json({ success: true, message: 'Plan updated successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error: ' + error.message });
+    }
+};
+
+// @desc    Delete a plan (Admin)
+// @route   DELETE /api/v1/subscriptions/plans/:id
+// @access  Private (Admin)
+const deletePlan = async (req, res) => {
+    try {
+        await pool.query('DELETE FROM plans WHERE id = ?', [req.params.id]);
+        res.json({ success: true, message: 'Plan deleted successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Add a feature to a plan
+// @route   POST /api/v1/subscriptions/plans/:id/features
+// @access  Private (Admin)
+const addFeature = async (req, res) => {
+    try {
+        const { featureKey, value } = req.body;
+        const planId = req.params.id;
+
+        const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [planId]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Plan not found' });
+
+        let features = JSON.parse(rows[0].features || '{}');
+        features[featureKey] = value;
+
+        await pool.query('UPDATE plans SET features = ? WHERE id = ?', [JSON.stringify(features), planId]);
+
+        res.json({ success: true, message: 'Feature added' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Delete a feature from a plan
+// @route   DELETE /api/v1/subscriptions/plans/:id/features/:key
+// @access  Private (Admin)
+const deleteFeature = async (req, res) => {
+    try {
+        const { id, key } = req.params;
+
+        const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Plan not found' });
+
+        let features = JSON.parse(rows[0].features || '{}');
+        delete features[key];
+
+        await pool.query('UPDATE plans SET features = ? WHERE id = ?', [JSON.stringify(features), id]);
+
+        res.json({ success: true, message: 'Feature deleted' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error' });
@@ -118,6 +205,10 @@ const getCurrentSubscription = async (req, res) => {
 module.exports = {
     getPlans,
     createPlan,
+    updatePlan,
+    deletePlan,
+    addFeature,
+    deleteFeature,
     subscribe,
     getCurrentSubscription
 };
