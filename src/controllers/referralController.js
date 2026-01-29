@@ -22,7 +22,9 @@ const getMyCode = async (req, res) => {
             success: true,
             data: {
                 referralCode: code,
-                referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`
+                referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`,
+                code: code, // Alias for frontend
+                shareableUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}` // Alias for frontend
             }
         });
     } catch (error) {
@@ -123,9 +125,115 @@ const validateReferralCode = async (req, res) => {
     }
 };
 
+// Mappings between Frontend keys and DB keys
+const SETTINGS_MAP = {
+    referrerRewardAmount: 'referral_referrer_reward_amount',
+    refereeRewardAmount: 'referral_referee_reward_amount',
+    refereeDiscountPercentage: 'referral_referee_discount_percentage',
+    currency: 'referral_currency',
+    bonusTier1Count: 'referral_bonus_tier1_count',
+    bonusTier1Amount: 'referral_bonus_tier1_amount',
+    bonusTier2Count: 'referral_bonus_tier2_count',
+    bonusTier2Amount: 'referral_bonus_tier2_amount',
+    bonusTier3Count: 'referral_bonus_tier3_count',
+    bonusTier3Amount: 'referral_bonus_tier3_amount',
+    requireEmailVerification: 'referral_require_email_verification',
+    requireFirstPayment: 'referral_require_first_payment',
+    rewardPendingPeriodHours: 'referral_reward_pending_period_hours',
+    referralExpiryDays: 'referral_expiry_days',
+    maxReferralsPerDay: 'referral_max_referrals_per_day',
+    maxReferralsPerMonth: 'referral_max_referrals_per_month',
+    enableIpTracking: 'referral_enable_ip_tracking',
+    enableDeviceFingerprinting: 'referral_enable_device_fingerprinting',
+    isActive: 'referral_is_active',
+    allowTrialCompletionReward: 'referral_allow_trial_completion_reward',
+    trialCompletionRewardMultiplier: 'referral_trial_completion_reward_multiplier'
+};
+
+// @desc    Get referral settings (Admin)
+// @route   GET /api/v1/admin/referrals/settings
+// @access  Private (Admin)
+const getReferralSettings = async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM settings WHERE setting_key LIKE "referral_%"');
+        console.log(`[DEBUG] Fetched ${rows.length} settings from DB`);
+
+        const dbSettings = {};
+        rows.forEach(row => {
+            dbSettings[row.setting_key] = row.setting_value;
+        });
+
+        const responseData = {};
+
+        // Map DB keys back to frontend keys with type conversion
+        for (const [feKey, dbKey] of Object.entries(SETTINGS_MAP)) {
+            const value = dbSettings[dbKey];
+
+            // Handle booleans
+            if (['isActive', 'requireEmailVerification', 'requireFirstPayment', 'enableIpTracking', 'enableDeviceFingerprinting', 'allowTrialCompletionReward'].includes(feKey)) {
+                responseData[feKey] = value === 'true';
+            }
+            // Handle numbers
+            else if (['currency'].includes(feKey)) {
+                responseData[feKey] = value || 'INR';
+            }
+            else {
+                responseData[feKey] = parseFloat(value || 0);
+            }
+        }
+
+        console.log('[DEBUG] Sending settings to frontend:', responseData);
+        res.json({ success: true, data: responseData });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Update referral settings (Admin)
+// @route   PUT /api/v1/admin/referrals/settings
+// @access  Private (Admin)
+const updateReferralSettings = async (req, res) => {
+    try {
+        const updates = req.body;
+        console.log('[DEBUG] Received settings update:', updates);
+
+        // Validation: Ensure basic rewards are set
+        if (!updates.referrerRewardAmount && updates.referrerRewardAmount !== 0) {
+            console.warn('[DEBUG] Missing referrerRewardAmount in payload');
+        }
+
+        const queries = [];
+
+        for (const [feKey, dbKey] of Object.entries(SETTINGS_MAP)) {
+            if (updates[feKey] !== undefined) {
+                const value = String(updates[feKey]); // Store everything as string
+                console.log(`[DEBUG] Saving ${feKey} -> ${dbKey}: ${value}`);
+                queries.push(
+                    pool.query('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?', [dbKey, value, value])
+                );
+            }
+        }
+
+        if (queries.length === 0) {
+            return res.status(400).json({ message: 'No valid settings provided to update' });
+        }
+
+        await Promise.all(queries);
+        console.log('[DEBUG] Settings saved successfully');
+
+        res.json({ success: true, message: 'Settings updated successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     getReferralStats,
     getMyCode,
     getReferralHistory,
-    validateReferralCode
+    validateReferralCode,
+    getReferralSettings,
+    updateReferralSettings
 };

@@ -8,7 +8,7 @@ const generateToken = require('../utils/generateToken');
 // @access  Public
 const registerUser = async (req, res) => {
     try {
-        const { fullName, email, password, role } = req.body;
+        const { fullName, email, password, role, phoneNumber } = req.body;
 
         const [userExists] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
 
@@ -20,8 +20,8 @@ const registerUser = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, salt);
 
         const [result] = await pool.query(
-            'INSERT INTO users (fullName, email, password, role) VALUES (?, ?, ?, ?)',
-            [fullName, email, hashedPassword, role || 'User']
+            'INSERT INTO users (fullName, email, password, role, phoneNumber) VALUES (?, ?, ?, ?, ?)',
+            [fullName, email, hashedPassword, role || 'User', phoneNumber || null]
         );
 
         const userId = result.insertId;

@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 
 const createCouponTable = async () => {
-    const query = `
+  const query = `
     CREATE TABLE IF NOT EXISTS coupons (
       id INT AUTO_INCREMENT PRIMARY KEY,
       code VARCHAR(50) UNIQUE NOT NULL,
@@ -20,7 +20,21 @@ const createCouponTable = async () => {
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `;
-    await pool.query(query);
+  await pool.query(query);
+
+  const usageQuery = `
+    CREATE TABLE IF NOT EXISTS coupon_usages (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      couponId INT NOT NULL,
+      userId INT NOT NULL,
+      orderId VARCHAR(255),
+      usedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      discountAmount DECIMAL(10, 2),
+      FOREIGN KEY (couponId) REFERENCES coupons(id) ON DELETE CASCADE,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `;
+  await pool.query(usageQuery);
 };
 
 module.exports = createCouponTable;

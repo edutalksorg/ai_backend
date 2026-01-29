@@ -20,6 +20,18 @@ const createUserProgressTable = require('../models/userProgressModel');
 const createPronunciationTable = require('../models/pronunciationModel');
 const createQuizAttemptTable = require('../models/quizAttemptModel');
 
+// Preserving settings table for Referral Settings
+const createSettingsTable = async () => {
+  const query = `
+    CREATE TABLE IF NOT EXISTS settings (
+      setting_key VARCHAR(255) PRIMARY KEY,
+      setting_value TEXT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `;
+  await pool.query(query);
+};
+
 const initDb = async () => {
   try {
     console.log(`🚀 Checking database existence...`);
@@ -55,6 +67,7 @@ const initDb = async () => {
     await createUserProgressTable();
     await createPronunciationTable();
     await createQuizAttemptTable();
+    await createSettingsTable(); // Ensure this is called
 
     console.log('✅ All tables initialized.');
 
@@ -94,6 +107,85 @@ const initDb = async () => {
       }
     } catch (e) { }
 
+    // Update topics table schema if needed
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM topics');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('content')) await pool.query('ALTER TABLE topics ADD COLUMN content LONGTEXT');
+      if (!colNames.includes('category')) await pool.query("ALTER TABLE topics ADD COLUMN category VARCHAR(100) DEFAULT 'General'");
+      if (!colNames.includes('difficulty')) await pool.query("ALTER TABLE topics ADD COLUMN difficulty ENUM('Beginner', 'Intermediate', 'Advanced') DEFAULT 'Beginner'");
+      if (!colNames.includes('estimatedTime')) await pool.query("ALTER TABLE topics ADD COLUMN estimatedTime INT DEFAULT 15");
+      if (!colNames.includes('imageUrl')) await pool.query("ALTER TABLE topics ADD COLUMN imageUrl TEXT");
+      if (!colNames.includes('vocabularyList')) await pool.query("ALTER TABLE topics ADD COLUMN vocabularyList JSON");
+      if (!colNames.includes('discussionPoints')) await pool.query("ALTER TABLE topics ADD COLUMN discussionPoints JSON");
+
+      console.log("✅ Topics table schema verified/updated.");
+    } catch (e) {
+      console.error("❌ Failed to update topics table schema:", e.message);
+    }
+
+    // Sync Quizzes Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM quizzes');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('instructorId')) await pool.query('ALTER TABLE quizzes ADD COLUMN instructorId INT NOT NULL');
+      if (!colNames.includes('description')) await pool.query('ALTER TABLE quizzes ADD COLUMN description TEXT');
+      if (!colNames.includes('duration')) await pool.query('ALTER TABLE quizzes ADD COLUMN duration INT DEFAULT 30');
+      if (!colNames.includes('passingScore')) await pool.query('ALTER TABLE quizzes ADD COLUMN passingScore INT DEFAULT 60');
+      if (!colNames.includes('difficulty')) await pool.query("ALTER TABLE quizzes ADD COLUMN difficulty ENUM('Beginner', 'Intermediate', 'Advanced') DEFAULT 'Beginner'");
+      if (!colNames.includes('categoryId')) await pool.query('ALTER TABLE quizzes ADD COLUMN categoryId VARCHAR(100)');
+      if (!colNames.includes('isPublished')) await pool.query('ALTER TABLE quizzes ADD COLUMN isPublished BOOLEAN DEFAULT FALSE');
+      if (!colNames.includes('isDeleted')) await pool.query('ALTER TABLE quizzes ADD COLUMN isDeleted BOOLEAN DEFAULT FALSE');
+      if (!colNames.includes('timeLimitMinutes')) await pool.query('ALTER TABLE quizzes ADD COLUMN timeLimitMinutes INT DEFAULT 20');
+      if (!colNames.includes('maxAttempts')) await pool.query('ALTER TABLE quizzes ADD COLUMN maxAttempts INT DEFAULT 2');
+      if (!colNames.includes('randomizeQuestions')) await pool.query('ALTER TABLE quizzes ADD COLUMN randomizeQuestions BOOLEAN DEFAULT TRUE');
+      if (!colNames.includes('showCorrectAnswers')) await pool.query('ALTER TABLE quizzes ADD COLUMN showCorrectAnswers BOOLEAN DEFAULT TRUE');
+
+      // Ensure topicId is nullable for standalone quizzes
+      await pool.query('ALTER TABLE quizzes MODIFY COLUMN topicId INT NULL');
+
+      // Update foreign key if it exists (dropping and recreating is safest in a sync script if we want to change ON DELETE)
+      try {
+        // Find the FK name for topicId if it exists
+        const [fks] = await pool.query(`
+              SELECT CONSTRAINT_NAME 
+              FROM information_schema.KEY_COLUMN_USAGE 
+              WHERE TABLE_NAME = 'quizzes' 
+                AND COLUMN_NAME = 'topicId' 
+                AND REFERENCED_TABLE_NAME = 'topics'
+                AND TABLE_SCHEMA = DATABASE()
+          `);
+
+        if (fks.length > 0) {
+          const fkName = fks[0].CONSTRAINT_NAME;
+          await pool.query(`ALTER TABLE quizzes DROP FOREIGN KEY ${fkName}`);
+          await pool.query('ALTER TABLE quizzes ADD CONSTRAINT fk_quizzes_topics FOREIGN KEY (topicId) REFERENCES topics(id) ON DELETE SET NULL');
+        }
+      } catch (fkError) {
+        console.warn("⚠️ Could not update quizzes foreign key:", fkError.message);
+      }
+
+      console.log("✅ Quizzes table schema verified/updated.");
+    } catch (e) {
+      console.error("❌ Failed to update quizzes table schema:", e.message);
+    }
+
+    // Sync Pronunciation Paragraphs Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM pronunciation_paragraphs');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('language')) await pool.query("ALTER TABLE pronunciation_paragraphs ADD COLUMN language VARCHAR(50) DEFAULT 'en-US'");
+      if (!colNames.includes('phoneticTranscription')) await pool.query("ALTER TABLE pronunciation_paragraphs ADD COLUMN phoneticTranscription TEXT");
+      if (!colNames.includes('referenceAudioUrl')) await pool.query("ALTER TABLE pronunciation_paragraphs ADD COLUMN referenceAudioUrl TEXT");
+
+      console.log("✅ Pronunciation Paragraphs table schema verified/updated.");
+    } catch (e) {
+      console.error("❌ Failed to update pronunciation paragraphs table schema:", e.message);
+    }
+
     // Seed or Update Super Admin
     const [existingAdmin] = await pool.query('SELECT * FROM users WHERE role = "SuperAdmin"');
     const superAdminEmail = process.env.DEFAULT_SUPERADMIN_EMAIL || 'superadmin@edutalks.com';
@@ -112,6 +204,19 @@ const initDb = async () => {
         [hashedPassword]
       );
       console.log('✅ Super Admin password synced with environment.');
+    }
+
+    // Sync Subscriptions Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM subscriptions');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('paymentStatus')) {
+        await pool.query("ALTER TABLE subscriptions ADD COLUMN paymentStatus ENUM('paid', 'pending', 'failed', 'refunded') DEFAULT 'pending'");
+        console.log("✅ Added 'paymentStatus' column to subscriptions.");
+      }
+    } catch (e) {
+      console.error("❌ Failed to update subscriptions table schema:", e.message);
     }
 
 

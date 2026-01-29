@@ -54,7 +54,27 @@ const updateProfile = async (req, res) => {
     }
 };
 
+// @desc    Get user profile
+// @route   GET /api/v1/users/profile
+// @access  Private
+const getUserProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const [users] = await pool.query('SELECT id, fullName, email, phoneNumber, role, isApproved, avatarUrl, walletBalance, referralCode, createdAt FROM users WHERE id = ?', [userId]);
+
+        if (users.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json({ success: true, data: users[0] });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     getProgressSummary,
     updateProfile,
+    getUserProfile,
 };

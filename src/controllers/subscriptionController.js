@@ -37,24 +37,71 @@ const createPlan = async (req, res) => {
 // @desc    Update a plan (Admin)
 // @route   PUT /api/v1/subscriptions/plans/:id
 // @access  Private (Admin)
+// @desc    Update a plan (Admin)
+// @route   PUT /api/v1/subscriptions/plans/:id
+// @access  Private (Admin)
 const updatePlan = async (req, res) => {
     try {
-        const { name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline } = req.body;
         const planId = req.params.id;
+        const updates = req.body;
 
-        // Fetch existing features if not provided
-        let featuresToUpdate = features;
-        if (features === undefined) {
-            const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [planId]);
-            if (rows.length > 0) {
-                featuresToUpdate = JSON.parse(rows[0].features || '{}');
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: 'No fields provided for update' });
+        }
+
+        // Special handling for features: If provided, we merge or replace? 
+        // Current logic assumes replacement if provided.
+        // We need to exclude 'features' from direct string/number mapping if we handle it separately,
+        // but for now, let's treat it as a potential partial update field.
+
+        let features = updates.features;
+
+        // If features is undefined, we don't touch it. 
+        // If it IS defined, we need to stringify it.
+
+        // Construct dynamic query
+        const fields = [];
+        const values = [];
+
+        // Map allowed fields to DB columns
+        const allowedFields = {
+            name: 'name',
+            description: 'description',
+            price: 'price',
+            currency: 'currency',
+            billingCycle: 'billingCycle',
+            isActive: 'isActive',
+            displayOrder: 'displayOrder',
+            trialDays: 'trialDays',
+            isMostPopular: 'isMostPopular',
+            marketingTagline: 'marketingTagline'
+        };
+
+        for (const [key, dbColumn] of Object.entries(allowedFields)) {
+            if (updates[key] !== undefined) {
+                fields.push(`${dbColumn} = ?`);
+                values.push(updates[key]);
             }
         }
 
-        await pool.query(
-            'UPDATE plans SET name=?, description=?, price=?, currency=?, billingCycle=?, features=?, isActive=?, displayOrder=?, trialDays=?, isMostPopular=?, marketingTagline=? WHERE id=?',
-            [name, description, price, currency, billingCycle, JSON.stringify(featuresToUpdate || {}), isActive, displayOrder, trialDays, isMostPopular, marketingTagline, planId]
-        );
+        // Handle features separately to ensure valid JSON
+        if (features !== undefined) {
+            // If partial update of features is needed, we'd need to fetch first. 
+            // But usually the editor sends the whole features object.
+            // If we just want to update metadata (isMostPopular), features is undefined, so we skip this.
+            fields.push(`features = ?`);
+            values.push(JSON.stringify(features));
+        }
+
+        if (fields.length === 0) {
+            return res.json({ success: true, message: 'No changes detected or valid fields provided' });
+        }
+
+        values.push(planId);
+
+        const sql = `UPDATE plans SET ${fields.join(', ')} WHERE id = ?`;
+
+        await pool.query(sql, values);
 
         res.json({ success: true, message: 'Plan updated successfully' });
     } catch (error) {
@@ -87,7 +134,13 @@ const addFeature = async (req, res) => {
         const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [planId]);
         if (rows.length === 0) return res.status(404).json({ message: 'Plan not found' });
 
-        let features = JSON.parse(rows[0].features || '{}');
+        let features = {};
+        try {
+            features = JSON.parse(rows[0].features || '{}');
+        } catch (e) {
+            features = {};
+        }
+
         features[featureKey] = value;
 
         await pool.query('UPDATE plans SET features = ? WHERE id = ?', [JSON.stringify(features), planId]);
@@ -109,7 +162,13 @@ const deleteFeature = async (req, res) => {
         const [rows] = await pool.query('SELECT features FROM plans WHERE id = ?', [id]);
         if (rows.length === 0) return res.status(404).json({ message: 'Plan not found' });
 
-        let features = JSON.parse(rows[0].features || '{}');
+        let features = {};
+        try {
+            features = JSON.parse(rows[0].features || '{}');
+        } catch (e) {
+            features = {};
+        }
+
         delete features[key];
 
         await pool.query('UPDATE plans SET features = ? WHERE id = ?', [JSON.stringify(features), id]);
@@ -129,7 +188,7 @@ const deleteFeature = async (req, res) => {
 const subscribe = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { planId, paymentMethodId, useFreeTrial } = req.body;
+        const { planId, paymentMethodId, useFreeTrial, couponCode } = req.body;
 
         // 1. Fetch Plan
         const [plans] = await pool.query('SELECT * FROM plans WHERE id = ?', [planId]);
@@ -142,7 +201,30 @@ const subscribe = async (req, res) => {
             return res.status(400).json({ message: 'User already has an active subscription' });
         }
 
-        // 3. Calculate Dates
+        // 3. Coupon Logic
+        let discountAmount = 0;
+        let couponId = null;
+
+        if (couponCode) {
+            const [coupons] = await pool.query('SELECT * FROM coupons WHERE code = ? AND status = "Active"', [couponCode]);
+            if (coupons.length > 0) {
+                const coupon = coupons[0];
+                couponId = coupon.id;
+
+                // Calculate discount just for recording purposes (payment is assumed successful here)
+                if (coupon.discountType === 'Percentage') {
+                    discountAmount = (plan.price * coupon.discountValue) / 100;
+                    if (coupon.maxDiscountAmount && discountAmount > coupon.maxDiscountAmount) {
+                        discountAmount = coupon.maxDiscountAmount;
+                    }
+                } else {
+                    discountAmount = coupon.discountValue;
+                }
+                if (discountAmount > plan.price) discountAmount = plan.price;
+            }
+        }
+
+        // 4. Calculate Dates
         const startDate = new Date();
         const endDate = new Date();
 
@@ -156,12 +238,21 @@ const subscribe = async (req, res) => {
             else if (plan.billingCycle === 'Quarterly') endDate.setMonth(startDate.getMonth() + 3);
         }
 
-        // 4. Create Subscription
+        // 5. Create Subscription
         // Note: In real app, we verify payment first. Here we assume free or mock payment.
         const [subResult] = await pool.query(
             'INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) VALUES (?, ?, ?, ?, ?, ?)',
             [userId, planId, 'active', startDate, endDate, 'paid']
         );
+
+        // 6. Record Coupon Usage
+        if (couponId) {
+            await pool.query(
+                'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount) VALUES (?, ?, ?, ?)',
+                [couponId, userId, `SUB-${subResult.insertId}`, discountAmount]
+            );
+            await pool.query('UPDATE coupons SET currentUsageCount = currentUsageCount + 1 WHERE id = ?', [couponId]);
+        }
 
         res.json({
             success: true,

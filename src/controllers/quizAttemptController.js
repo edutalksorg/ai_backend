@@ -9,6 +9,10 @@ const submitQuiz = async (req, res) => {
         const quizId = req.params.id;
         const { answers, startedAt } = req.body; // answers: { "0": 1, "1": 3 } (questionIndex: answerIndex) or array
 
+        if (!answers || typeof answers !== 'object') {
+            return res.status(400).json({ message: 'Answers are required and must be an object or array' });
+        }
+
         // 1. Fetch Quiz Questions
         const [quizRows] = await pool.query('SELECT questions FROM quizzes WHERE id = ?', [quizId]);
         if (quizRows.length === 0) {
@@ -16,18 +20,35 @@ const submitQuiz = async (req, res) => {
         }
 
         const questions = quizRows[0].questions; // MySQL JSON type is automatically parsed by mysql2 usually, or might need JSON.parse
-        const parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+        let parsedQuestions = [];
+        try {
+            parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+        } catch (e) {
+            parsedQuestions = [];
+        }
+
+        if (!Array.isArray(parsedQuestions)) {
+            parsedQuestions = [];
+        }
 
         let correctCount = 0;
         let totalQuestions = parsedQuestions.length;
 
+        // Helper to format date for MySQL
+        const formatDateForMySQL = (date) => {
+            return date.toISOString().slice(0, 19).replace('T', ' ');
+        };
+
+        const startTime = startedAt ? formatDateForMySQL(new Date(startedAt)) : formatDateForMySQL(new Date());
+
         // 2. Calculate Score
         // Assume answers is an object where key is question index and value is selected option index
-        // Or answers is an array matching questions
+        // or answers is an array matching questions
 
         parsedQuestions.forEach((q, index) => {
             const userAns = answers[index] || answers[index.toString()];
-            // Compare loose or strict? Assuming 0-based index for options
+
+            // Compare loose (==) to handle string/number differences
             if (userAns !== undefined && userAns == q.correctAnswer) {
                 correctCount++;
             }
@@ -38,7 +59,7 @@ const submitQuiz = async (req, res) => {
         // 3. Save Attempt
         const [result] = await pool.query(
             'INSERT INTO quiz_attempts (userId, quizId, score, totalQuestions, correctAnswers, answers, startedAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [userId, quizId, score, totalQuestions, correctCount, JSON.stringify(answers), startedAt || new Date()]
+            [userId, quizId, score, totalQuestions, correctCount, JSON.stringify(answers), startTime]
         );
 
         // 4. Update User Progress (Optional, but good for logic)

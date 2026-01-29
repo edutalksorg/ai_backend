@@ -6,7 +6,8 @@ const pool = require('../config/db');
 const getParagraphs = async (req, res) => {
     try {
         const { level, mode, pageNumber = 1, pageSize = 100 } = req.query;
-        let query = 'SELECT * FROM pronunciation_paragraphs WHERE isDeleted = FALSE';
+        // Alias content as text and level as difficulty to match frontend naming
+        let query = 'SELECT id, title, content AS text, level AS difficulty, instructorId, isPublished, language, phoneticTranscription, referenceAudioUrl, createdAt, updatedAt FROM pronunciation_paragraphs WHERE isDeleted = FALSE';
         const params = [];
 
         // Filter by level if provided
@@ -16,7 +17,6 @@ const getParagraphs = async (req, res) => {
         }
 
         // Instructor mode: Show only their own paragraphs (even unpublished, but NOT deleted)
-        // Note: Use 'isDeleted' to hide deleted items globally unless we have a 'trash' view
         if (mode === 'instructor' && req.user) {
             query += ' AND instructorId = ?';
             params.push(req.user.id);
@@ -34,7 +34,7 @@ const getParagraphs = async (req, res) => {
         res.json({ success: true, data: paragraphs });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -44,7 +44,7 @@ const getParagraphs = async (req, res) => {
 const getParagraph = async (req, res) => {
     try {
         const [rows] = await pool.query(
-            'SELECT * FROM pronunciation_paragraphs WHERE id = ? AND isDeleted = FALSE',
+            'SELECT id, title, content AS text, level AS difficulty, instructorId, isPublished, language, phoneticTranscription, referenceAudioUrl, createdAt, updatedAt FROM pronunciation_paragraphs WHERE id = ? AND isDeleted = FALSE',
             [req.params.id]
         );
 
@@ -55,7 +55,7 @@ const getParagraph = async (req, res) => {
         res.json({ success: true, data: rows[0] });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -64,12 +64,25 @@ const getParagraph = async (req, res) => {
 // @access  Private (Instructor)
 const createParagraph = async (req, res) => {
     try {
-        const { title, content, level, isPublished } = req.body;
+        const {
+            Title, Text, Difficulty, Language,
+            PhoneticTranscription, ReferenceAudioUrl,
+            isPublished
+        } = req.body;
+
+        // Handle both camelCase (internal) and PascalCase (frontend payload)
+        const title = Title || req.body.title;
+        const content = Text || req.body.content || req.body.text;
+        const level = Difficulty || req.body.level || req.body.difficulty || 'Beginner';
+        const language = Language || req.body.language || 'en-US';
+        const phoneticTranscription = PhoneticTranscription || req.body.phoneticTranscription;
+        const referenceAudioUrl = ReferenceAudioUrl || req.body.referenceAudioUrl;
+
         const instructorId = req.user.id;
 
         const [result] = await pool.query(
-            'INSERT INTO pronunciation_paragraphs (title, content, level, instructorId, isPublished) VALUES (?, ?, ?, ?, ?)',
-            [title, content, level || 'Beginner', instructorId, isPublished || false]
+            'INSERT INTO pronunciation_paragraphs (title, content, level, instructorId, isPublished, language, phoneticTranscription, referenceAudioUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [title, content, level, instructorId, isPublished || false, language, phoneticTranscription, referenceAudioUrl]
         );
 
         res.status(201).json({
@@ -78,7 +91,7 @@ const createParagraph = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -87,18 +100,30 @@ const createParagraph = async (req, res) => {
 // @access  Private (Instructor)
 const updateParagraph = async (req, res) => {
     try {
-        const { title, content, level, isPublished } = req.body;
+        const {
+            Title, Text, Difficulty, Language,
+            PhoneticTranscription, ReferenceAudioUrl,
+            isPublished
+        } = req.body;
+
+        const title = Title || req.body.title;
+        const content = Text || req.body.content || req.body.text;
+        const level = Difficulty || req.body.level || req.body.difficulty;
+        const language = Language || req.body.language;
+        const phoneticTranscription = PhoneticTranscription || req.body.phoneticTranscription;
+        const referenceAudioUrl = ReferenceAudioUrl || req.body.referenceAudioUrl;
+
         const id = req.params.id;
 
         await pool.query(
-            'UPDATE pronunciation_paragraphs SET title=?, content=?, level=?, isPublished=? WHERE id=? AND instructorId=?',
-            [title, content, level, isPublished, id, req.user.id]
+            'UPDATE pronunciation_paragraphs SET title=?, content=?, level=?, isPublished=?, language=?, phoneticTranscription=?, referenceAudioUrl=? WHERE id=? AND instructorId=?',
+            [title, content, level, isPublished, language, phoneticTranscription, referenceAudioUrl, id, req.user.id]
         );
 
         res.json({ success: true, message: 'Paragraph updated' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -132,11 +157,83 @@ const deleteParagraph = async (req, res) => {
 const publishParagraph = async (req, res) => {
     try {
         const id = req.params.id;
-        await pool.query('UPDATE pronunciation_paragraphs SET isPublished = TRUE WHERE id = ? AND instructorId = ?', [id, req.user.id]);
-        res.json({ success: true, message: 'Paragraph published' });
+        const { isPublished } = req.body; // Expect boolean from body
+
+        // Use provided status, default to true if not provided (backward compatibility)
+        const status = isPublished !== undefined ? isPublished : true;
+
+        await pool.query('UPDATE pronunciation_paragraphs SET isPublished = ? WHERE id = ? AND instructorId = ?', [status, id, req.user.id]);
+
+        res.json({ success: true, message: `Paragraph ${status ? 'published' : 'unpublished'} successfully` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Convert paragraph to speech (Mock/Placeholder)
+// @route   POST /api/v1/pronunciation/paragraphs/:id/convert-paragraph-to-speech
+// @access  Private (Instructor)
+const convertParagraphToSpeech = async (req, res) => {
+    try {
+        const id = req.params.id;
+
+        // Check if paragraph exists
+        const [rows] = await pool.query('SELECT * FROM pronunciation_paragraphs WHERE id = ?', [id]);
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Paragraph not found' });
+        }
+
+        const paragraph = rows[0];
+
+        // MOCK TTS: In a real app, this would call Google/AWS/Azure TTS API
+        // For now, we return a success with a placeholder URL or the referenced one
+        const mockAudioUrl = paragraph.referenceAudioUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+
+        // Update with mock URL if none exists
+        if (!paragraph.referenceAudioUrl) {
+            await pool.query('UPDATE pronunciation_paragraphs SET referenceAudioUrl = ? WHERE id = ?', [mockAudioUrl, id]);
+        }
+
+        res.json({
+            success: true,
+            message: 'Audio generated successfully',
+            audioUrl: mockAudioUrl
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error: ' + error.message });
+    }
+};
+
+// @desc    Assess pronunciation
+// @route   POST /api/v1/pronunciation/assess
+// @access  Private
+const assessPronunciation = async (req, res) => {
+    try {
+        console.log('🎤 Received assessment request');
+        // Mock assessment logic
+        // In a real app, this would send the audio to a speech assessment API
+
+        // Randomly generate scores for demo purposes
+        const accuracy = 70 + Math.random() * 30; // 70-100
+        const fluency = 60 + Math.random() * 40;  // 60-100
+        const overall = (accuracy + fluency) / 2;
+
+        res.json({
+            success: true,
+            scores: {
+                accuracy: Math.round(accuracy),
+                fluency: Math.round(fluency),
+                overall: Math.round(overall)
+            },
+            feedback: "Good effort! Your pronunciation is clear with some minor pauses.",
+            mistakes: [], // Can populate with mock words if needed
+            processing: { status: 'Completed', isCompleted: true }
+        });
+    } catch (error) {
+        console.error('Assessment error:', error);
+        res.status(500).json({ message: 'Server error during assessment' });
     }
 };
 
@@ -146,5 +243,7 @@ module.exports = {
     createParagraph,
     updateParagraph,
     deleteParagraph,
-    publishParagraph
+    publishParagraph,
+    convertParagraphToSpeech,
+    assessPronunciation
 };

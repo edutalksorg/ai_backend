@@ -78,26 +78,60 @@ const reviewInstructor = async (req, res) => {
 // @desc    Get dashboard analytics (SuperAdmin/Admin)
 // @route   GET /api/v1/admin/analytics/dashboard
 // @access  Private (SuperAdmin/Admin)
+// @desc    Get dashboard analytics (SuperAdmin/Admin)
+// @route   GET /api/v1/admin/analytics/dashboard
+// @access  Private (SuperAdmin/Admin)
 const getDashboardStats = async (req, res) => {
     try {
         const [userCount] = await pool.query('SELECT COUNT(*) as count FROM users');
-        const [revenue] = await pool.query('SELECT SUM(amount) as total FROM transactions WHERE status = "completed"');
+        const [revenue] = await pool.query('SELECT SUM(amount) as total, COUNT(*) as count FROM transactions WHERE status = "completed"');
         const [activeSubs] = await pool.query('SELECT COUNT(*) as count FROM subscriptions WHERE status = "active"');
-        const [instructorCount] = await pool.query('SELECT COUNT(*) as count FROM users WHERE role = "Instructor"');
+
+        // 1. User Growth (Last 6 months)
+        const [userGrowth] = await pool.query(`
+            SELECT DATE_FORMAT(createdAt, '%Y-%m') as date, COUNT(*) as count 
+            FROM users 
+            WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 6 MONTH) 
+            GROUP BY date 
+            ORDER BY date ASC
+        `);
+
+        // 2. Revenue Trend (Last 6 months)
+        const [revenueTrend] = await pool.query(`
+            SELECT DATE_FORMAT(createdAt, '%Y-%m') as date, SUM(amount) as amount 
+            FROM transactions 
+            WHERE status = 'completed' AND createdAt >= DATE_SUB(NOW(), INTERVAL 6 MONTH) 
+            GROUP BY date 
+            ORDER BY date ASC
+        `);
+
+        // 3. User Role Distribution
+        const [roleDist] = await pool.query('SELECT role, COUNT(*) as value FROM users GROUP BY role');
+
+        // 4. Top Topics (Mocked if no usage table, or count from topics table)
+        // If we don't have usage analytics, we can just return top topics by ID or random for demo,
+        // OR better: Return topics count by category or simply the first 5 topics.
+        // Let's assume we want to show 'Topics' distribution.
+        const [topics] = await pool.query('SELECT title as topic, id as count FROM topics LIMIT 5');
+        // Note: The above is a placeholder. Real 'Top Topics' needs ‘user_progress’ aggregation.
+        // If topics table is empty, this returns empty.
 
         res.json({
             success: true,
             data: {
                 totalUsers: userCount[0].count,
-                totalRevenue: revenue[0].total || 0,
-                activeSubscriptions: activeSubs[0].count,
-                totalInstructors: instructorCount[0].count,
-                growthData: [], // Add logic for growth trends if needed
+                activeUsers: activeSubs[0].count, // Mapping active subscriptions to active users
+                totalRevenue: parseFloat(revenue[0].total || 0),
+                totalTransactions: revenue[0].count,
+                userGrowth: userGrowth.length ? userGrowth : [],
+                revenueTrend: revenueTrend.length ? revenueTrend : [],
+                topTopics: topics.length ? topics.map(t => ({ topic: t.topic, count: 10 })) : [], // Mock count if no real analytics
+                userRoleDistribution: roleDist,
             },
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -253,6 +287,93 @@ const updateUser = async (req, res) => {
     }
 };
 
+// @desc    Validate a coupon code
+// @route   POST /api/v1/coupons/validate
+// @access  Private (Authenticated users)
+const validateCoupon = async (req, res) => {
+    try {
+        const { code, couponCode, purchaseAmount, amount, planId } = req.body;
+        const userId = req.user.id;
+        const actualCode = code || couponCode;
+        const actualAmount = purchaseAmount || amount;
+
+        if (!actualCode) {
+            return res.status(400).json({ message: 'Coupon code is required' });
+        }
+
+        // 1. Find the coupon
+        const [coupons] = await pool.query('SELECT * FROM coupons WHERE code = ?', [actualCode]);
+        if (coupons.length === 0) {
+            return res.status(404).json({ message: 'Invalid coupon code' });
+        }
+
+        const coupon = coupons[0];
+
+        // 2. Check if active
+        if (coupon.status !== 'Active') {
+            return res.status(400).json({ message: 'This coupon is inactive or expired' });
+        }
+
+        // 3. Check expiration date
+        if (coupon.expiryDate && new Date(coupon.expiryDate) < new Date()) {
+            return res.status(400).json({ message: 'This coupon has expired' });
+        }
+
+        // 4. Check global usage limit
+        if (coupon.maxTotalUsage !== null) {
+            const [usageCount] = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponId = ?', [coupon.id]);
+            if (usageCount[0].count >= coupon.maxTotalUsage) {
+                return res.status(400).json({ message: 'This coupon has reached its maximum usage limit' });
+            }
+        }
+
+        // 5. Check per-user usage limit
+        if (coupon.maxUsagePerUser !== null) {
+            const [userUsage] = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponId = ? AND userId = ?', [coupon.id, userId]);
+            if (userUsage[0].count >= coupon.maxUsagePerUser) {
+                return res.status(400).json({ message: 'You have already used this coupon the maximum allowed times' });
+            }
+        }
+
+        // 6. Check applicable plan (if specific) or minimum purchase amount
+        if (coupon.minimumPurchaseAmount && actualAmount && actualAmount < coupon.minimumPurchaseAmount) {
+            return res.status(400).json({ message: `Minimum purchase amount of ${coupon.minimumPurchaseAmount} required` });
+        }
+
+        // Calculate discount
+        let discount = 0;
+        if (coupon.discountType === 'percentage') {
+            discount = (actualAmount * coupon.discountValue) / 100;
+            if (coupon.maxDiscountAmount && discount > coupon.maxDiscountAmount) {
+                discount = coupon.maxDiscountAmount;
+            }
+        } else {
+            discount = coupon.discountValue;
+        }
+
+        // Ensure discount doesn't exceed purchase amount
+        if (discount > actualAmount) {
+            discount = actualAmount;
+        }
+
+        res.json({
+            success: true,
+            data: {
+                id: coupon.id,
+                code: coupon.code,
+                discountType: coupon.discountType,
+                discountValue: coupon.discountValue,
+                calculatedDiscount: discount,
+                finalPrice: actualAmount - discount
+            }
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     getAllUsers,
     reviewInstructor,
@@ -261,6 +382,7 @@ module.exports = {
     createCoupon,
     updateCoupon,
     deleteCoupon,
+    validateCoupon,
     createUser,
     deleteUser,
     updateUser

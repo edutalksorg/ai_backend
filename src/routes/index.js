@@ -3,15 +3,20 @@ const router = express.Router();
 
 const authRoutes = require('./authRoutes');
 const { protect, authorize } = require('../middlewares/auth');
-const { getProgressSummary, updateProfile } = require('../controllers/userController');
+const { getProgressSummary, updateProfile, getUserProfile } = require('../controllers/userController');
 const {
     getTopics,
+    getTopicById,
+    getCategories,
     createTopic,
+    updateTopic,
     updateTopicStatus,
     deleteTopic,
     getQuizzes,
+    getQuizById,
     createQuiz,
     updateQuiz,
+    deleteQuiz,
     toggleQuizPublish,
     getInstructorStats
 } = require('../controllers/instructorController');
@@ -25,7 +30,8 @@ const {
     deleteCoupon,
     createUser,
     deleteUser,
-    updateUser
+    updateUser,
+    validateCoupon
 } = require('../controllers/adminController');
 const { submitQuiz, getQuizAttempts, getAttemptDetails } = require('../controllers/quizAttemptController');
 const {
@@ -37,7 +43,14 @@ const { initiatePhonePe, paymentCallback } = require('../controllers/paymentCont
 const { getAgoraToken } = require('../controllers/agoraController');
 const { getWallet, getTransactions, withdraw } = require('../controllers/walletController');
 const { updateAvailability, getAvailableUsers, initiateRandomCall, getCallHistory } = require('../controllers/callController');
-const { getReferralStats, getMyCode, getReferralHistory, validateReferralCode } = require('../controllers/referralController');
+const {
+    getReferralStats,
+    getMyCode,
+    getReferralHistory,
+    validateReferralCode,
+    getReferralSettings,
+    updateReferralSettings
+} = require('../controllers/referralController');
 const pronunciationRoutes = require('./pronunciationRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
 const permissionRoutes = require('./permissionRoutes');
@@ -51,6 +64,7 @@ router.use('/permission-management', permissionRoutes);
 
 // User routes
 router.get('/users/progress/summary', protect, getProgressSummary);
+router.get('/users/profile', protect, getUserProfile); // Added missing route
 router.put('/auth/profile', protect, updateProfile);
 router.post('/users/availability', protect, updateAvailability); // For Online Status
 
@@ -70,19 +84,26 @@ router.get('/referrals/stats', protect, getReferralStats);
 router.get('/referrals/my-code', protect, getMyCode);
 router.get('/referrals/history', protect, getReferralHistory);
 router.get('/referrals/validate/:code', validateReferralCode); // Public route
+// Admin Referral Settings
+router.get('/admin/referrals/settings', protect, authorize('Admin', 'SuperAdmin'), getReferralSettings);
+router.put('/admin/referrals/settings', protect, authorize('Admin', 'SuperAdmin'), updateReferralSettings);
 
 // Instructor - Topics
-router.get('/topics', protect, authorize('Instructor', 'Admin', 'SuperAdmin'), getTopics);
+router.get('/topics/categories', protect, getCategories);
+router.get('/topics', protect, authorize('Instructor', 'Admin', 'SuperAdmin', 'User', 'Learner', 'Image_User'), getTopics);
+router.get('/topics/:id', protect, authorize('Instructor', 'Admin', 'SuperAdmin', 'User', 'Learner', 'Image_User'), getTopicById);
 router.post('/topics', protect, authorize('Instructor', 'Admin', 'SuperAdmin'), createTopic);
+router.put('/topics/:id', protect, authorize('Instructor', 'Admin', 'SuperAdmin'), updateTopic);
 router.patch('/topics/:id/status', protect, authorize('Instructor', 'Admin'), updateTopicStatus);
 router.delete('/topics/:id', protect, authorize('Instructor', 'Admin'), deleteTopic);
 
 // Instructor - Quizzes
-router.get('/quizzes', protect, authorize('Instructor', 'Admin', 'SuperAdmin'), getQuizzes);
+router.get('/quizzes', protect, authorize('Instructor', 'Admin', 'SuperAdmin', 'User', 'Learner', 'Image_User'), getQuizzes);
+router.get('/quizzes/:id', protect, authorize('Instructor', 'Admin', 'SuperAdmin', 'User', 'Learner', 'Image_User'), getQuizById);
 router.post('/quizzes', protect, authorize('Instructor', 'Admin'), createQuiz);
 router.put('/quizzes/:id', protect, authorize('Instructor', 'Admin'), updateQuiz);
-router.patch('/quizzes/:id/publish', protect, authorize('Instructor', 'Admin'), toggleQuizPublish);
-router.patch('/quizzes/:id/publish', protect, authorize('Instructor', 'Admin'), toggleQuizPublish);
+router.delete('/quizzes/:id', protect, authorize('Instructor', 'Admin'), deleteQuiz);
+router.post('/quizzes/:id/publish', protect, authorize('Instructor', 'Admin'), toggleQuizPublish);
 router.get('/users/instructor-stats', protect, authorize('Instructor', 'Admin', 'SuperAdmin'), getInstructorStats);
 
 // Student - Quiz Attempts
@@ -95,7 +116,7 @@ router.get('/quizzes/:id/results', protect, getQuizAttempts); // Alias for resul
 router.get('/users', protect, authorize('Admin', 'SuperAdmin'), getAllUsers);
 router.post('/users', protect, authorize('Admin', 'SuperAdmin'), createUser);
 router.put('/users/:id', protect, authorize('Admin', 'SuperAdmin'), updateUser);
-router.delete('/users/:id', protect, authorize('SuperAdmin'), deleteUser);
+router.delete('/users/:id', protect, authorize('Admin', 'SuperAdmin'), deleteUser);
 router.post('/admin/instructors/:id/review', protect, authorize('Admin', 'SuperAdmin'), reviewInstructor);
 router.get('/admin/analytics/dashboard', protect, authorize('Admin', 'SuperAdmin'), getDashboardStats);
 
@@ -105,6 +126,7 @@ router.get('/coupons', protect, authorize('Admin', 'SuperAdmin'), getAllCoupons)
 router.post('/coupons', protect, authorize('Admin', 'SuperAdmin'), createCoupon);
 router.put('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), updateCoupon);
 router.delete('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), deleteCoupon);
+router.post('/coupons/validate', protect, validateCoupon);
 
 // Super Admin routes (RBAC)
 router.get('/superadmin/permissions', protect, authorize('SuperAdmin'), getAllPermissions);
