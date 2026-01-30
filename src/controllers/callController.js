@@ -15,6 +15,7 @@ const updateAvailability = async (req, res) => {
     }
 };
 
+
 // Helper to check if a user is available for calls
 const isUserCallEligible = async (user) => {
     // 1. Must have an active subscription
