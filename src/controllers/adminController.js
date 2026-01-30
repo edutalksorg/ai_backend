@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 
+
 // @desc    Get all users (Admin/SuperAdmin)
 // @route   GET /api/v1/users
 // @access  Private (Admin/SuperAdmin)
