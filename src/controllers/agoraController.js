@@ -14,6 +14,7 @@ const getAgoraToken = async (req, res) => {
 
         const token = generateAgoraToken(channelName, uid);
 
+
         res.json({
             success: true,
             data: { token },
