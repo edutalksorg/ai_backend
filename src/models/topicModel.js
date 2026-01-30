@@ -20,6 +20,7 @@ const createTopicTable = async () => {
       FOREIGN KEY (instructorId) REFERENCES users(id)
     )
   `;
+
   await pool.query(query);
 };
 
