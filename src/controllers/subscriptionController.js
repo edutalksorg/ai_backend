@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const { createOrder } = require('../services/razorpayService');
+const crypto = require('crypto');
 
 // --- PLANS ---
 
@@ -188,7 +190,7 @@ const deleteFeature = async (req, res) => {
 const subscribe = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { planId, paymentMethodId, useFreeTrial, couponCode } = req.body;
+        const { planId, paymentMethodId, useFreeTrial, couponCode, userPhone: bodyPhone } = req.body;
 
         // 1. Fetch Plan
         const [plans] = await pool.query('SELECT * FROM plans WHERE id = ?', [planId]);
@@ -228,7 +230,7 @@ const subscribe = async (req, res) => {
         const startDate = new Date();
         const endDate = new Date();
 
-        if (useFreeTrial && plan.trialDays > 0) {
+        if ((useFreeTrial || plan.billingCycle === 'Free') && plan.trialDays > 0) {
             // Logic for trial
             endDate.setDate(startDate.getDate() + plan.trialDays);
         } else {
@@ -236,16 +238,65 @@ const subscribe = async (req, res) => {
             if (plan.billingCycle === 'Monthly') endDate.setMonth(startDate.getMonth() + 1);
             else if (plan.billingCycle === 'Yearly') endDate.setFullYear(startDate.getFullYear() + 1);
             else if (plan.billingCycle === 'Quarterly') endDate.setMonth(startDate.getMonth() + 3);
+            else {
+                // Fallback: Default to 1 month if unknown
+                endDate.setMonth(startDate.getMonth() + 1);
+            }
         }
 
-        // 5. Create Subscription
-        // Note: In real app, we verify payment first. Here we assume free or mock payment.
+        // 5. IF PAID PLAN: Initiate Razorpay Order
+        const payableAmount = plan.price - discountAmount;
+
+        if (payableAmount > 0) {
+            // Generate a unique transaction ID
+            const merchantTransactionId = `SUB_${userId}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+
+            // Create PENDING Subscription
+            const [subResult] = await pool.query(
+                'INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) VALUES (?, ?, ?, ?, ?, ?)',
+                [userId, planId, 'pending', startDate, endDate, 'pending']
+            );
+
+            // Record Coupon Usage (pending)
+            if (couponId) {
+                await pool.query(
+                    'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount) VALUES (?, ?, ?, ?)',
+                    [couponId, userId, merchantTransactionId, discountAmount]
+                );
+            }
+
+            // Create Transaction record
+            await pool.query(
+                'INSERT INTO transactions (userId, amount, type, providerTransactionId, status) VALUES (?, ?, ?, ?, ?)',
+                [userId, payableAmount, 'payment', merchantTransactionId, 'pending']
+            );
+
+            // Initiate Razorpay Order
+            const razorpayOrder = await createOrder(payableAmount, merchantTransactionId);
+
+            return res.json({
+                success: true,
+                keyId: process.env.RAZORPAY_KEY_ID,
+                orderId: razorpayOrder.id,
+                amount: razorpayOrder.amount, // in paisa
+                currency: razorpayOrder.currency,
+                planName: plan.name,
+                description: plan.description,
+                user: {
+                    name: req.user?.fullName || 'User',
+                    email: req.user?.email || '',
+                    contact: bodyPhone || req.user?.phoneNumber || ''
+                }
+            });
+        }
+
+        // 6. IF FREE PLAN: Create Active Subscription immediately
         const [subResult] = await pool.query(
             'INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) VALUES (?, ?, ?, ?, ?, ?)',
-            [userId, planId, 'active', startDate, endDate, 'paid']
+            [userId, planId, 'active', startDate, endDate, 'free']
         );
 
-        // 6. Record Coupon Usage
+        // Record Coupon Usage
         if (couponId) {
             await pool.query(
                 'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount) VALUES (?, ?, ?, ?)',
@@ -264,8 +315,11 @@ const subscribe = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('❌ [Subscription] Error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error initiating subscription'
+        });
     }
 };
 
@@ -292,6 +346,30 @@ const getCurrentSubscription = async (req, res) => {
         res.status(500).json({ message: 'Server error' });
     }
 };
+// @desc    Cancel subscription
+// @route   POST /api/v1/subscriptions/cancel
+// @access  Private
+const cancelSubscription = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { subscriptionId, reason } = req.body;
+
+        // Verify ownership and update status
+        const [result] = await pool.query(
+            'UPDATE subscriptions SET status = "cancelled", updatedAt = NOW() WHERE id = ? AND userId = ? AND status = "active"',
+            [subscriptionId, userId]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: 'Active subscription not found' });
+        }
+
+        res.json({ success: true, message: 'Subscription cancelled successfully' });
+    } catch (error) {
+        console.error('Cancel subscription error:', error);
+        res.status(500).json({ message: 'Server error cancelling subscription' });
+    }
+};
 
 module.exports = {
     getPlans,
@@ -301,5 +379,6 @@ module.exports = {
     addFeature,
     deleteFeature,
     subscribe,
-    getCurrentSubscription
+    getCurrentSubscription,
+    cancelSubscription
 };

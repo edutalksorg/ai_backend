@@ -8,7 +8,7 @@ const createPlanTable = async () => {
       description TEXT,
       price DECIMAL(10, 2) NOT NULL,
       currency VARCHAR(10) DEFAULT 'INR',
-      billingCycle ENUM('Monthly', 'Yearly', 'Quarterly') NOT NULL,
+      billingCycle ENUM('Monthly', 'Yearly', 'Quarterly', 'Free') NOT NULL,
       features JSON,
       isActive BOOLEAN DEFAULT TRUE,
       displayOrder INT DEFAULT 0,

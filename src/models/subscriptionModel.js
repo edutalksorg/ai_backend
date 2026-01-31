@@ -9,7 +9,9 @@ const createSubscriptionTable = async () => {
       status ENUM('active', 'expired', 'cancelled', 'pending') DEFAULT 'pending',
       startDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       endDate TIMESTAMP,
-      paymentStatus ENUM('paid', 'pending', 'failed', 'refunded') DEFAULT 'pending',
+      paymentStatus ENUM('paid', 'pending', 'failed', 'refunded', 'free', 'completed') DEFAULT 'pending',
+      createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (planId) REFERENCES plans(id)
     )

@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const { sendVerificationEmail } = require('../services/emailService');
 
 
 // @desc    Get all users (Admin/SuperAdmin)
@@ -24,10 +26,12 @@ const getAllUsers = async (req, res) => {
 const createUser = async (req, res) => {
     try {
         const { fullName, email, password, role, phoneNumber } = req.body;
+        console.log(`[DEBUG] createUser called with:`, { fullName, email, role, phoneNumber });
 
         // Check if user exists
         const [userExists] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
         if (userExists.length > 0) {
+            console.log(`[DEBUG] createUser failed: User already exists (${email})`);
             return res.status(400).json({ message: 'User already exists' });
         }
 
@@ -35,10 +39,47 @@ const createUser = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // Normalize role: Capitalize first letter (e.g., 'instructor' -> 'Instructor')
+        const normalizedRole = role ? role.charAt(0).toUpperCase() + role.slice(1).toLowerCase() : 'User';
+
+        // Instructors created by admin need email verification
+        let isVerified = 1;
+        let verificationToken = null;
+        let verificationTokenExpires = null;
+
+        if (normalizedRole === 'Instructor') {
+            console.log(`[DEBUG] Instructor role detected. Requiring email verification.`);
+            isVerified = 0;
+            verificationToken = crypto.randomBytes(32).toString('hex');
+            verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+        }
+
         const [result] = await pool.query(
-            'INSERT INTO users (fullName, email, password, role, phoneNumber, isApproved) VALUES (?, ?, ?, ?, ?, ?)',
-            [fullName, email, hashedPassword, role || 'User', phoneNumber, 1] // Auto-approve if created by admin
+            'INSERT INTO users (fullName, email, password, role, phoneNumber, isApproved, isVerified, verificationToken, verificationTokenExpires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                fullName,
+                email,
+                hashedPassword,
+                normalizedRole,
+                phoneNumber,
+                1, // isApproved: Auto-approve if created by admin
+                isVerified,
+                verificationToken,
+                verificationTokenExpires
+            ]
         );
+        console.log(`[DEBUG] User inserted successfully. ID: ${result.insertId}, Role: ${normalizedRole}, isVerified: ${isVerified}`);
+
+        // Send verification email ONLY for Instructors
+        if (normalizedRole === 'Instructor') {
+            try {
+                console.log('📧 Admin sending verification email to instructor:', email);
+                await sendVerificationEmail(email, fullName, verificationToken);
+            } catch (emailError) {
+                console.error('Failed to send verification email to instructor:', emailError);
+                // We still proceed as the user is created, but log the error
+            }
+        }
 
         res.status(201).json({
             success: true,
@@ -47,7 +88,8 @@ const createUser = async (req, res) => {
                 fullName,
                 email,
                 role,
-                phoneNumber
+                phoneNumber,
+                isVerified: !!isVerified
             },
         });
     } catch (error) {
@@ -213,6 +255,7 @@ const deleteCoupon = async (req, res) => {
 // @route   DELETE /api/v1/users/:id
 // @access  Private (SuperAdmin)
 const deleteUser = async (req, res) => {
+    let connection;
     try {
         const userId = req.params.id;
         const requestingUserId = req.user.id;
@@ -222,22 +265,60 @@ const deleteUser = async (req, res) => {
             return res.status(400).json({ message: 'Cannot delete your own account' });
         }
 
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
         // Check if user exists
-        const [users] = await pool.query('SELECT id, fullName, role FROM users WHERE id = ?', [userId]);
+        const [users] = await connection.query('SELECT id, fullName, role FROM users WHERE id = ?', [userId]);
         if (users.length === 0) {
+            await connection.rollback();
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Delete the user
-        await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+        // 1. Delete dependent relations (Cascading Delete Manually)
+        // Referrals (Fix: Include referredUserId)
+        await connection.query('DELETE FROM referrals WHERE referrerId = ? OR referredUserId = ?', [userId, userId]);
+
+        // Call History
+        await connection.query('DELETE FROM call_history WHERE callerId = ? OR calleeId = ?', [userId, userId]);
+
+        // Topics (Fix: specific for Instructors)
+        await connection.query('DELETE FROM topics WHERE instructorId = ?', [userId]);
+
+        // Transactions
+        await connection.query('DELETE FROM transactions WHERE userId = ?', [userId]);
+
+        // Subscriptions
+        await connection.query('DELETE FROM subscriptions WHERE userId = ?', [userId]);
+
+        // Coupon Usages
+        await connection.query('DELETE FROM coupon_usages WHERE userId = ?', [userId]);
+
+        // Wallet (Removed: walletBalance is on users table)
+        // await connection.query('DELETE FROM wallet WHERE userId = ?', [userId]);
+
+        // Notifications (if table exists, nice to have, wrap in try/catch if unsure but assuming typical schema)
+        try {
+            await connection.query('DELETE FROM notifications WHERE userId = ?', [userId]);
+        } catch (e) {
+            // Ignore if table doesn't exist
+        }
+
+        // 2. Delete the user
+        await connection.query('DELETE FROM users WHERE id = ?', [userId]);
+
+        await connection.commit();
 
         res.json({
             success: true,
             message: `User ${users[0].fullName} deleted successfully`,
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        if (connection) await connection.rollback();
+        console.error('Error deleting user:', error);
+        res.status(500).json({ message: 'Server error: ' + error.message });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
@@ -375,6 +456,56 @@ const validateCoupon = async (req, res) => {
     }
 };
 
+
+// @desc    Resend Verification Email (Admin)
+// @route   POST /api/v1/admin/resend-verification
+// @access  Admin only
+const resendVerificationEmail = async (req, res) => {
+    try {
+        const { userId } = req.body;
+
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+        if (users.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const user = users[0];
+
+        if (user.isVerified) {
+            return res.status(400).json({ success: false, message: 'User is already verified' });
+        }
+
+        // Generate new verification token if needed
+        let verificationToken = user.verificationToken;
+        if (!verificationToken) {
+            verificationToken = crypto.randomBytes(32).toString('hex');
+            const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+            await pool.query(
+                'UPDATE users SET verificationToken = ?, verificationTokenExpires = ? WHERE id = ?',
+                [verificationToken, verificationTokenExpires, userId]
+            );
+        }
+
+        // Send verification email
+        console.log('📧 Admin resending verification email to:', user.email);
+        await sendVerificationEmail(user.email, user.fullName, verificationToken);
+
+        res.status(200).json({
+            success: true,
+            message: 'Verification email resent successfully',
+            emailSentTo: user.email
+        });
+    } catch (error) {
+        console.error('[DEBUG] resendVerificationEmail error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to resend verification email',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getAllUsers,
     reviewInstructor,
@@ -383,8 +514,9 @@ module.exports = {
     createCoupon,
     updateCoupon,
     deleteCoupon,
-    validateCoupon,
     createUser,
     deleteUser,
-    updateUser
+    updateUser,
+    validateCoupon,
+    resendVerificationEmail
 };

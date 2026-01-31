@@ -52,7 +52,7 @@ const getReferralStats = async (req, res) => {
             data: {
                 referralCode: code,
                 totalReferrals: referrals[0].count,
-                totalEarnings: earnings[0].total || 0,
+                totalEarnings: parseFloat(earnings[0].total || 0),
                 referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`
             }
         });
@@ -73,7 +73,7 @@ const getReferralHistory = async (req, res) => {
         const offset = (page - 1) * limit;
 
         const [rows] = await pool.query(`
-            SELECT r.*, u.fullName as referredUserName, u.avatarUrl
+            SELECT r.*, u.fullName as refereeName, u.avatarUrl
             FROM referrals r
             JOIN users u ON r.referredUserId = u.id
             WHERE r.referrerId = ?

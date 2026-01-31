@@ -36,13 +36,26 @@ const getProgressSummary = async (req, res) => {
 // @access  Private
 const updateProfile = async (req, res) => {
     try {
-        const { fullName, phoneNumber } = req.body;
+        const { fullName, phoneNumber, bio, country } = req.body;
         const userId = req.user.id;
+        const userRole = req.user.role;
 
+        // Update users table with basic profile fields
         await pool.query(
             'UPDATE users SET fullName = ?, phoneNumber = ? WHERE id = ?',
             [fullName, phoneNumber, userId]
         );
+
+        // If user is an instructor, update instructor_profiles table
+        if (userRole === 'Instructor') {
+            // Use INSERT ... ON DUPLICATE KEY UPDATE to handle both insert and update
+            await pool.query(
+                `INSERT INTO instructor_profiles (userId, bio, country) 
+                 VALUES (?, ?, ?) 
+                 ON DUPLICATE KEY UPDATE bio = VALUES(bio), country = VALUES(country)`,
+                [userId, bio || null, country || null]
+            );
+        }
 
         res.json({
             success: true,
@@ -60,7 +73,17 @@ const updateProfile = async (req, res) => {
 const getUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const [users] = await pool.query('SELECT id, fullName, email, phoneNumber, role, isApproved, avatarUrl, walletBalance, referralCode, createdAt FROM users WHERE id = ?', [userId]);
+        const [users] = await pool.query(`
+            SELECT u.id, u.fullName, u.email, u.phoneNumber, u.role, u.isApproved, u.avatarUrl, u.walletBalance, u.referralCode, u.createdAt,
+                   s.status as subscriptionStatus, p.name as subscriptionPlan, s.endDate as trialEndDate,
+                   ip.bio, ip.country
+            FROM users u
+            LEFT JOIN subscriptions s ON u.id = s.userId AND s.status = 'active'
+            LEFT JOIN plans p ON s.planId = p.id
+            LEFT JOIN instructor_profiles ip ON u.id = ip.userId
+            WHERE u.id = ?
+            ORDER BY s.endDate DESC LIMIT 1
+        `, [userId]);
 
         if (users.length === 0) {
             return res.status(404).json({ message: 'User not found' });

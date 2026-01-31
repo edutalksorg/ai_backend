@@ -107,6 +107,26 @@ const initDb = async () => {
       }
     } catch (e) { }
 
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM users');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('isVerified')) {
+        await pool.query("ALTER TABLE users ADD COLUMN isVerified BOOLEAN DEFAULT FALSE");
+        console.log("✅ Added 'isVerified' column to users.");
+      }
+      if (!colNames.includes('verificationToken')) {
+        await pool.query("ALTER TABLE users ADD COLUMN verificationToken VARCHAR(255)");
+        console.log("✅ Added 'verificationToken' column to users.");
+      }
+      if (!colNames.includes('verificationTokenExpires')) {
+        await pool.query("ALTER TABLE users ADD COLUMN verificationTokenExpires TIMESTAMP NULL");
+        console.log("✅ Added 'verificationTokenExpires' column to users.");
+      }
+    } catch (e) {
+      console.error("❌ Failed to sync verification columns:", e.message);
+    }
+
     // Update topics table schema if needed
     try {
       const [cols] = await pool.query('SHOW COLUMNS FROM topics');
@@ -186,6 +206,36 @@ const initDb = async () => {
       console.error("❌ Failed to update pronunciation paragraphs table schema:", e.message);
     }
 
+    // Sync Call History Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM call_history');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('rating')) {
+        await pool.query('ALTER TABLE call_history ADD COLUMN rating INT DEFAULT NULL');
+        console.log("✅ Added 'rating' column to call_history.");
+      }
+
+      console.log("✅ Call history table schema verified/updated.");
+    } catch (e) {
+      console.error("❌ Failed to update call_history table schema:", e.message);
+    }
+
+    // Sync Instructor Profiles Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM instructor_profiles');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('country')) {
+        await pool.query('ALTER TABLE instructor_profiles ADD COLUMN country VARCHAR(100)');
+        console.log("✅ Added 'country' column to instructor_profiles.");
+      }
+
+      console.log("✅ Instructor profiles table schema verified/updated.");
+    } catch (e) {
+      console.error("❌ Failed to update instructor_profiles table schema:", e.message);
+    }
+
     // Seed or Update Super Admin
     const [existingAdmin] = await pool.query('SELECT * FROM users WHERE role = "SuperAdmin"');
     const superAdminEmail = process.env.DEFAULT_SUPERADMIN_EMAIL || 'superadmin@edutalks.com';
@@ -206,17 +256,127 @@ const initDb = async () => {
       console.log('✅ Super Admin password synced with environment.');
     }
 
+    // Sync Plans Table Schema
+    try {
+      console.log('🔄 Syncing plans table schema...');
+      const [cols] = await pool.query('SHOW COLUMNS FROM plans');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('displayOrder')) {
+        await pool.query("ALTER TABLE plans ADD COLUMN displayOrder INT DEFAULT 0");
+        console.log("✅ Added 'displayOrder' column to plans.");
+      }
+      if (!colNames.includes('trialDays')) {
+        await pool.query("ALTER TABLE plans ADD COLUMN trialDays INT DEFAULT 0");
+        console.log("✅ Added 'trialDays' column to plans.");
+      }
+      if (!colNames.includes('isMostPopular')) {
+        await pool.query("ALTER TABLE plans ADD COLUMN isMostPopular BOOLEAN DEFAULT FALSE");
+        console.log("✅ Added 'isMostPopular' column to plans.");
+      }
+      if (!colNames.includes('marketingTagline')) {
+        await pool.query("ALTER TABLE plans ADD COLUMN marketingTagline VARCHAR(255)");
+        console.log("✅ Added 'marketingTagline' column to plans.");
+      }
+      if (!colNames.includes('features')) {
+        await pool.query("ALTER TABLE plans ADD COLUMN features JSON");
+        console.log("✅ Added 'features' column to plans.");
+      }
+
+      // Update billingCycle ENUM to include 'Free'
+      await pool.query("ALTER TABLE plans MODIFY COLUMN billingCycle ENUM('Monthly', 'Yearly', 'Quarterly', 'Free') NOT NULL");
+      console.log("✅ Updated billingCycle ENUM to include 'Free'.");
+
+    } catch (e) {
+      console.error("❌ Failed to update plans table schema:", e.message);
+    }
+
+    // Seed Default Plans
+    try {
+      const defaultPlans = [
+        ['Free Trial', '24-hour full access trial', 0, 'Free', 1, 0, false],
+        ['Monthly', 'Full monthly access', 0, 'Monthly', 0, 1, false],
+        ['Quarterly', 'Full quarterly access', 0, 'Quarterly', 0, 2, false],
+        ['Yearly', 'Full yearly access', 0, 'Yearly', 0, 3, true]
+      ];
+
+      for (const [name, desc, price, cycle, trial, order, popular] of defaultPlans) {
+        const [exists] = await pool.query('SELECT * FROM plans WHERE name = ?', [name]);
+        if (exists.length === 0) {
+          await pool.query(
+            'INSERT INTO plans (name, description, price, billingCycle, trialDays, displayOrder, isMostPopular, isActive) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [name, desc, price, cycle, trial, order, popular, true]
+          );
+          console.log(`✅ Seeded plan: ${name}`);
+        }
+      }
+    } catch (e) {
+      console.error("❌ Failed to seed default plans:", e.message);
+    }
+
     // Sync Subscriptions Table Schema
     try {
       const [cols] = await pool.query('SHOW COLUMNS FROM subscriptions');
       const colNames = cols.map(c => c.Field);
 
       if (!colNames.includes('paymentStatus')) {
-        await pool.query("ALTER TABLE subscriptions ADD COLUMN paymentStatus ENUM('paid', 'pending', 'failed', 'refunded') DEFAULT 'pending'");
+        await pool.query("ALTER TABLE subscriptions ADD COLUMN paymentStatus ENUM('paid', 'pending', 'failed', 'refunded', 'free', 'completed') DEFAULT 'pending'");
         console.log("✅ Added 'paymentStatus' column to subscriptions.");
+      } else {
+        await pool.query("ALTER TABLE subscriptions MODIFY COLUMN paymentStatus ENUM('paid', 'pending', 'failed', 'refunded', 'free', 'completed') DEFAULT 'pending'");
+        console.log("✅ Updated 'paymentStatus' ENUM on subscriptions.");
+      }
+      if (!colNames.includes('createdAt')) {
+        await pool.query("ALTER TABLE subscriptions ADD COLUMN createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+        console.log("✅ Added 'createdAt' column to subscriptions.");
+      }
+      if (!colNames.includes('updatedAt')) {
+        await pool.query("ALTER TABLE subscriptions ADD COLUMN updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+        console.log("✅ Added 'updatedAt' column to subscriptions.");
       }
     } catch (e) {
       console.error("❌ Failed to update subscriptions table schema:", e.message);
+    }
+
+    // Sync Transactions Table Schema
+    try {
+      const [cols] = await pool.query('SHOW COLUMNS FROM transactions');
+      const colNames = cols.map(c => c.Field);
+
+      if (!colNames.includes('updatedAt')) {
+        await pool.query("ALTER TABLE transactions ADD COLUMN updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+        console.log("✅ Added 'updatedAt' column to transactions.");
+      }
+      await pool.query("ALTER TABLE transactions MODIFY COLUMN status ENUM('pending', 'initiated', 'completed', 'failed', 'refunded') DEFAULT 'pending'");
+      console.log("✅ Updated 'status' ENUM on transactions.");
+
+      // ADDED: Update transactions schema for referrals
+      const [tCols] = await pool.query('SHOW COLUMNS FROM transactions');
+      const tColNames = tCols.map(c => c.Field);
+      if (!tColNames.includes('description')) {
+        await pool.query('ALTER TABLE transactions ADD COLUMN description TEXT AFTER status');
+        console.log("✅ Added 'description' column to transactions.");
+      }
+      if (!tColNames.includes('metadata')) {
+        await pool.query('ALTER TABLE transactions ADD COLUMN metadata JSON AFTER description');
+        console.log("✅ Added 'metadata' column to transactions.");
+      }
+      if (!tColNames.includes('fee')) {
+        await pool.query('ALTER TABLE transactions ADD COLUMN fee DECIMAL(10, 2) DEFAULT 0 AFTER amount');
+        console.log("✅ Added 'fee' column to transactions.");
+      }
+      await pool.query("ALTER TABLE transactions MODIFY COLUMN type ENUM('payment', 'withdrawal', 'refund', 'wallet_add', 'credit') NOT NULL");
+      console.log("✅ Updated 'type' ENUM on transactions.");
+    } catch (e) {
+      console.error("❌ Failed to update transactions table schema:", e.message);
+    }
+
+    // Sync Call History Table Schema
+    try {
+      await pool.query("ALTER TABLE call_history MODIFY COLUMN status ENUM('initiated', 'ringing', 'accepted', 'rejected', 'completed', 'missed', 'declined', 'failed', 'busy') DEFAULT 'ringing'");
+      console.log("✅ Updated call_history status ENUM to include 'initiated', 'accepted', and 'rejected'.");
+    } catch (e) {
+      console.error("❌ Failed to update call_history table schema:", e.message);
     }
 
 

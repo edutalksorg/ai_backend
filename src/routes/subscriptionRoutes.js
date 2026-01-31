@@ -8,7 +8,8 @@ const {
     addFeature,
     deleteFeature,
     subscribe,
-    getCurrentSubscription
+    getCurrentSubscription,
+    cancelSubscription
 } = require('../controllers/subscriptionController');
 const { protect, authorize } = require('../middlewares/auth');
 
@@ -17,6 +18,7 @@ router.get('/plans', getPlans);
 
 // Protected
 router.post('/subscribe', protect, subscribe);
+router.post('/cancel', protect, cancelSubscription);
 router.get('/current', protect, getCurrentSubscription);
 
 // Admin

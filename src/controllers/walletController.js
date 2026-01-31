@@ -10,8 +10,8 @@ const getWallet = async (req, res) => {
         const [transactions] = await pool.query('SELECT SUM(amount) as totalEarned FROM transactions WHERE userId = ? AND type = "credit" AND status = "completed"', [userId]);
         const [spent] = await pool.query('SELECT SUM(amount) as totalSpent FROM transactions WHERE userId = ? AND type = "debit" AND status = "completed"', [userId]);
 
-        // Pending withdrawals
-        const [frozen] = await pool.query('SELECT SUM(amount) as frozen FROM transactions WHERE userId = ? AND type = "withdrawal" AND status = "pending"', [userId]);
+        // Pending or processing withdrawals
+        const [frozen] = await pool.query('SELECT SUM(amount) as frozen FROM transactions WHERE userId = ? AND type = "withdrawal" AND status IN ("pending", "initiated")', [userId]);
 
         res.json({
             success: true,
