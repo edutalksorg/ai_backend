@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const razorpayService = require('../services/razorpayService');
 
 // @desc    Get all pending withdrawals
 // @route   GET /api/v1/admin/payments/withdrawals/pending
@@ -43,17 +44,90 @@ const getPendingWithdrawals = async (req, res) => {
 // @route   POST /api/v1/admin/payments/withdrawals/:id/approve
 // @access  Private (Admin/SuperAdmin)
 const approveWithdrawal = async (req, res) => {
+    const connection = await pool.getConnection();
     try {
+        await connection.beginTransaction();
         const transactionId = req.params.id;
-        // Status 'initiated' or 'processing' can be used as approved
-        await pool.query(
-            'UPDATE transactions SET status = "initiated", description = ? WHERE id = ? AND status = "pending"',
-            ['Withdrawal Approved (Processing)', transactionId]
+
+        // 1. Get the transaction and user details
+        const [transactions] = await connection.query(`
+            SELECT t.*, u.fullName, u.email, u.phoneNumber 
+            FROM transactions t
+            JOIN users u ON t.userId = u.id
+            WHERE t.id = ? AND t.type = "withdrawal" AND t.status = "pending"
+        `, [transactionId]);
+
+        if (transactions.length === 0) {
+            await connection.release();
+            return res.status(404).json({ message: 'Pending withdrawal not found' });
+        }
+
+        const transaction = transactions[0];
+        const bankDetails = typeof transaction.metadata === 'string' ? JSON.parse(transaction.metadata) : transaction.metadata;
+
+        if (!bankDetails || !bankDetails.accountNumber || !bankDetails.ifsc) {
+            throw new Error('Invalid bank details for automated payout');
+        }
+
+        console.log(`🚀 [Payout] Starting automated payout for transaction ${transactionId}...`);
+
+        // 2. RazorpayX Automated Payout Flow
+        // 2.1 Create Contact
+        const contactId = await razorpayService.createContact({
+            id: transaction.userId,
+            fullName: transaction.fullName,
+            email: transaction.email,
+            phoneNumber: transaction.phoneNumber
+        });
+
+        // 2.2 Create Fund Account
+        const fundAccountId = await razorpayService.createFundAccount(contactId, bankDetails);
+
+        // 2.3 Create Payout
+        const payout = await razorpayService.createPayout(transaction.amount, fundAccountId, transactionId);
+
+        console.log(`✅ [Payout] Payout initiated successfully. Payout ID: ${payout.id}`);
+
+        // 3. Deduct from user balance (Merging Complete logic here)
+        const [updateResult] = await connection.query(
+            'UPDATE users SET walletBalance = walletBalance - ? WHERE id = ? AND walletBalance >= ?',
+            [transaction.amount, transaction.userId, transaction.amount]
         );
-        res.json({ success: true, message: 'Withdrawal approved' });
+
+        if (updateResult.affectedRows === 0) {
+            throw new Error('Insufficient user balance or user not found during payout finalization');
+        }
+
+        // 4. Update transaction status to "completed"
+        const updatedMetadata = {
+            ...bankDetails,
+            razorpayContactId: contactId,
+            razorpayFundAccountId: fundAccountId,
+            razorpayPayoutId: payout.id,
+            payoutStatus: payout.status,
+            completedAt: new Date().toISOString()
+        };
+
+        await connection.query(
+            'UPDATE transactions SET status = "completed", description = ?, metadata = ? WHERE id = ?',
+            [`Withdrawal Completed via RazorpayX (ID: ${payout.id})`, JSON.stringify(updatedMetadata), transactionId]
+        );
+
+        await connection.commit();
+        res.json({
+            success: true,
+            message: 'Withdrawal processed and paid automatically',
+            payoutId: payout.id
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        if (connection) await connection.rollback();
+        console.error('❌ Approve Withdrawal (Automatic) Error:', error);
+        res.status(500).json({
+            message: 'Failed to initiate automatic payout: ' + error.message,
+            detail: error.message
+        });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
@@ -83,6 +157,11 @@ const completeWithdrawal = async (req, res) => {
     try {
         await connection.beginTransaction();
         const transactionId = req.params.id;
+        const { bankTransferReference } = req.body;
+
+        if (!bankTransferReference) {
+            return res.status(400).json({ message: 'Bank transfer reference is required to complete withdrawal' });
+        }
 
         // 1. Get the transaction
         const [transactions] = await connection.query('SELECT * FROM transactions WHERE id = ? AND type = "withdrawal"', [transactionId]);
@@ -104,10 +183,15 @@ const completeWithdrawal = async (req, res) => {
             throw new Error('Insufficient user balance or user not found');
         }
 
-        // 3. Update transaction status
+        // 3. Update transaction status and store reference in metadata
+        const metadata = {
+            bankTransferReference,
+            completedAt: new Date().toISOString()
+        };
+
         await connection.query(
-            'UPDATE transactions SET status = "completed", description = ? WHERE id = ?',
-            ['Withdrawal Completed Successfully', transactionId]
+            'UPDATE transactions SET status = "completed", description = ?, metadata = ? WHERE id = ?',
+            [`Withdrawal Completed - Ref: ${bankTransferReference}`, JSON.stringify(metadata), transactionId]
         );
 
         await connection.commit();

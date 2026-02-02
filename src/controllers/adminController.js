@@ -9,7 +9,29 @@ const { sendVerificationEmail } = require('../services/emailService');
 // @access  Private (Admin/SuperAdmin)
 const getAllUsers = async (req, res) => {
     try {
-        const [users] = await pool.query('SELECT id, fullName, email, phoneNumber, role, isApproved, createdAt FROM users');
+        const query = `
+            SELECT 
+                u.id, 
+                u.fullName, 
+                u.email, 
+                u.phoneNumber, 
+                u.role, 
+                u.isApproved, 
+                u.createdAt,
+                s.status as subscriptionStatus,
+                p.name as planName
+            FROM users u
+            LEFT JOIN (
+                SELECT userId, status, planId
+                FROM (
+                    SELECT userId, status, planId, ROW_NUMBER() OVER (PARTITION BY userId ORDER BY createdAt DESC) as rn
+                    FROM subscriptions
+                ) t
+                WHERE rn = 1
+            ) s ON u.id = s.userId
+            LEFT JOIN plans p ON s.planId = p.id
+        `;
+        const [users] = await pool.query(query);
         res.json({
             success: true,
             data: users,
