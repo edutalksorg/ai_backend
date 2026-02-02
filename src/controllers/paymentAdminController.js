@@ -6,16 +6,16 @@ const razorpayService = require('../services/razorpayService');
 // @access  Private (Admin/SuperAdmin)
 const getPendingWithdrawals = async (req, res) => {
     try {
-        const [rows] = await pool.query(`
-            SELECT t.*, u.fullName as userName, u.email, u.phoneNumber 
+        const { rows } = await pool.query(`
+            SELECT t.*, u.fullname as "userName", u.email, u.phonenumber as "phoneNumber" 
             FROM transactions t
-            JOIN users u ON t.userId = u.id
+            JOIN users u ON t.userid = u.id
             WHERE t.type = 'withdrawal' AND t.status = 'pending'
-            ORDER BY t.createdAt ASC
+            ORDER BY t.createdat ASC
         `);
 
-        // Parse metadata and flatten for frontend
         const withdrawals = rows.map(row => {
+            // Check if metadata is string or object (JSONB returns object)
             const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {});
             return {
                 ...row,
@@ -44,9 +44,9 @@ const getPendingWithdrawals = async (req, res) => {
 // @route   POST /api/v1/admin/payments/withdrawals/:id/approve
 // @access  Private (Admin/SuperAdmin)
 const approveWithdrawal = async (req, res) => {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     try {
-        await connection.beginTransaction();
+        await client.query('BEGIN');
         const transactionId = req.params.id;
         const { bankTransferReference } = req.body;
 
@@ -54,31 +54,34 @@ const approveWithdrawal = async (req, res) => {
             return res.status(400).json({ message: 'Bank transfer reference is required for manual approval' });
         }
 
-        // 1. Get the transaction and user details
-        const [transactions] = await connection.query(`
-            SELECT t.*, u.fullName, u.email, u.phoneNumber 
+        const { rows: transactions } = await client.query(`
+            SELECT t.*, u.fullname as "fullName", u.email, u.phonenumber as "phoneNumber" 
             FROM transactions t
-            JOIN users u ON t.userId = u.id
-            WHERE t.id = ? AND t.type = "withdrawal" AND t.status = "pending"
+            JOIN users u ON t.userid = u.id
+            WHERE t.id = $1 AND t.type = 'withdrawal' AND t.status = 'pending'
         `, [transactionId]);
 
         if (transactions.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Pending withdrawal not found' });
         }
 
         const transaction = transactions[0];
 
-        // 2. Deduct from user balance
-        const [updateResult] = await connection.query(
-            'UPDATE users SET walletBalance = walletBalance - ? WHERE id = ? AND walletBalance >= ?',
-            [transaction.amount, transaction.userId, transaction.amount]
+        // Aliasing walletBalance issue check: DB has walletbalance.
+        // But UPDATE statement updates column `walletBalance` which PG sees as `walletbalance`. Correct.
+        // transaction.userId -> transaction.userid if not aliased.
+        const userId = transaction.userId || transaction.userid;
+
+        const updateResult = await client.query(
+            'UPDATE users SET walletbalance = walletbalance - $1 WHERE id = $2 AND walletbalance >= $3',
+            [transaction.amount, userId, transaction.amount]
         );
 
-        if (updateResult.affectedRows === 0) {
+        if (updateResult.rowCount === 0) {
             throw new Error('Insufficient user balance or user not found');
         }
 
-        // 3. Update transaction status to "completed" and store reference
         const meta = typeof transaction.metadata === 'string' ? JSON.parse(transaction.metadata) : (transaction.metadata || {});
         const updatedMetadata = {
             ...meta,
@@ -87,22 +90,22 @@ const approveWithdrawal = async (req, res) => {
             payoutMode: 'manual'
         };
 
-        await connection.query(
-            'UPDATE transactions SET status = "completed", description = ?, metadata = ? WHERE id = ?',
+        await client.query(
+            'UPDATE transactions SET status = \'completed\', description = $1, metadata = $2 WHERE id = $3',
             [`Withdrawal Manually Approved - Ref: ${bankTransferReference}`, JSON.stringify(updatedMetadata), transactionId]
         );
 
-        await connection.commit();
+        await client.query('COMMIT');
         res.json({
             success: true,
             message: 'Withdrawal manually approved successfully'
         });
     } catch (error) {
-        if (connection) await connection.rollback();
+        await client.query('ROLLBACK');
         console.error('❌ Manual Approval Error:', error);
         res.status(500).json({ message: 'Failed to approve withdrawal manually: ' + error.message });
     } finally {
-        if (connection) connection.release();
+        client.release();
     }
 };
 
@@ -114,7 +117,7 @@ const rejectWithdrawal = async (req, res) => {
         const transactionId = req.params.id;
         const { rejectionReason } = req.body;
         await pool.query(
-            'UPDATE transactions SET status = "failed", description = ? WHERE id = ? AND status = "pending"',
+            'UPDATE transactions SET status = \'failed\', description = $1 WHERE id = $2 AND status = \'pending\'',
             [`Withdrawal Rejected: ${rejectionReason || 'No reason provided'}`, transactionId]
         );
         res.json({ success: true, message: 'Withdrawal rejected' });
@@ -128,9 +131,9 @@ const rejectWithdrawal = async (req, res) => {
 // @route   POST /api/v1/admin/payments/withdrawals/:id/complete
 // @access  Private (Admin/SuperAdmin)
 const completeWithdrawal = async (req, res) => {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     try {
-        await connection.beginTransaction();
+        await client.query('BEGIN');
         const transactionId = req.params.id;
         const { bankTransferReference } = req.body;
 
@@ -138,45 +141,43 @@ const completeWithdrawal = async (req, res) => {
             return res.status(400).json({ message: 'Bank transfer reference is required to complete withdrawal' });
         }
 
-        // 1. Get the transaction
-        const [transactions] = await connection.query('SELECT * FROM transactions WHERE id = ? AND type = "withdrawal"', [transactionId]);
+        const { rows: transactions } = await client.query('SELECT * FROM transactions WHERE id = $1 AND type = \'withdrawal\'', [transactionId]);
 
         if (transactions.length === 0) {
-            await connection.release();
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Transaction not found' });
         }
 
         const transaction = transactions[0];
+        const userId = transaction.userId || transaction.userid;
 
-        // 2. Deduct from user balance
-        const [updateResult] = await connection.query(
-            'UPDATE users SET walletBalance = walletBalance - ? WHERE id = ? AND walletBalance >= ?',
-            [transaction.amount, transaction.userId, transaction.amount]
+        const updateResult = await client.query(
+            'UPDATE users SET walletbalance = walletbalance - $1 WHERE id = $2 AND walletbalance >= $3',
+            [transaction.amount, userId, transaction.amount]
         );
 
-        if (updateResult.affectedRows === 0) {
+        if (updateResult.rowCount === 0) {
             throw new Error('Insufficient user balance or user not found');
         }
 
-        // 3. Update transaction status and store reference in metadata
         const metadata = {
             bankTransferReference,
             completedAt: new Date().toISOString()
         };
 
-        await connection.query(
-            'UPDATE transactions SET status = "completed", description = ?, metadata = ? WHERE id = ?',
+        await client.query(
+            'UPDATE transactions SET status = \'completed\', description = $1, metadata = $2 WHERE id = $3',
             [`Withdrawal Completed - Ref: ${bankTransferReference}`, JSON.stringify(metadata), transactionId]
         );
 
-        await connection.commit();
+        await client.query('COMMIT');
         res.json({ success: true, message: 'Withdrawal completed successfully' });
     } catch (error) {
-        await connection.rollback();
+        await client.query('ROLLBACK');
         console.error(error);
         res.status(500).json({ message: 'Server error: ' + error.message });
     } finally {
-        connection.release();
+        client.release();
     }
 };
 
@@ -185,11 +186,11 @@ const completeWithdrawal = async (req, res) => {
 // @access  Private (Admin/SuperAdmin)
 const getAllTransactions = async (req, res) => {
     try {
-        const [rows] = await pool.query(`
-            SELECT t.*, u.fullName as userName, u.email, u.phoneNumber 
+        const { rows } = await pool.query(`
+            SELECT t.*, u.fullname as "userName", u.email, u.phonenumber as "phoneNumber" 
             FROM transactions t
-            JOIN users u ON t.userId = u.id
-            ORDER BY t.createdAt DESC
+            JOIN users u ON t.userid = u.id
+            ORDER BY t.createdat DESC
             LIMIT 100
         `);
 
@@ -205,12 +206,12 @@ const getAllTransactions = async (req, res) => {
 // @access  Private (Admin/SuperAdmin)
 const getPendingRefunds = async (req, res) => {
     try {
-        const [rows] = await pool.query(`
-            SELECT t.*, u.fullName as userName, u.email, u.phoneNumber 
+        const { rows } = await pool.query(`
+            SELECT t.*, u.fullname as "userName", u.email, u.phonenumber as "phoneNumber" 
             FROM transactions t
-            JOIN users u ON t.userId = u.id
+            JOIN users u ON t.userid = u.id
             WHERE t.type = 'refund' AND t.status = 'pending'
-            ORDER BY t.createdAt ASC
+            ORDER BY t.createdat ASC
         `);
 
         res.json({
@@ -227,64 +228,65 @@ const getPendingRefunds = async (req, res) => {
 // @route   POST /api/v1/admin/payments/wallets/adjust-balance
 // @access  Private (Admin/SuperAdmin)
 const adjustWalletBalance = async (req, res) => {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     try {
-        await connection.beginTransaction();
+        await client.query('BEGIN');
         const { userId, amount, type, reason } = req.body; // type: 'Credit' or 'Debit'
 
         if (type === 'Credit') {
-            await connection.query('UPDATE users SET walletBalance = walletBalance + ? WHERE id = ?', [amount, userId]);
-            await connection.query(
-                'INSERT INTO transactions (userId, amount, type, status, description) VALUES (?, ?, ?, ?, ?)',
-                [userId, amount, 'credit', 'completed', reason || 'Admin Adjustment (Credit)']
+            await client.query('UPDATE users SET walletbalance = walletbalance + $1 WHERE id = $2', [amount, userId]);
+            await client.query(
+                'INSERT INTO transactions (userid, amount, type, status, description) VALUES ($1, $2, \'credit\', \'completed\', $3)',
+                [userId, amount, reason || 'Admin Adjustment (Credit)']
             );
         } else {
-            await connection.query('UPDATE users SET walletBalance = walletBalance - ? WHERE id = ?', [amount, userId]);
-            await connection.query(
-                'INSERT INTO transactions (userId, amount, type, status, description) VALUES (?, ?, ?, ?, ?)',
-                [userId, -amount, 'debit', 'completed', reason || 'Admin Adjustment (Debit)']
+            await client.query('UPDATE users SET walletbalance = walletbalance - $1 WHERE id = $2', [amount, userId]);
+            await client.query(
+                'INSERT INTO transactions (userid, amount, type, status, description) VALUES ($1, $2, \'debit\', \'completed\', $3)',
+                [userId, -amount, reason || 'Admin Adjustment (Debit)']
             );
         }
 
-        await connection.commit();
+        await client.query('COMMIT');
         res.json({ success: true, message: 'Wallet balance adjusted successfully' });
     } catch (error) {
-        await connection.rollback();
+        await client.query('ROLLBACK');
         console.error(error);
         res.status(500).json({ message: 'Server error' });
     } finally {
-        connection.release();
+        client.release();
     }
 };
 
 const getUserForAdjustment = async (req, res) => {
     try {
         const userId = req.params.id;
+        // Fixing casing errors in SELECT (u.fullName -> u.fullname in PG unless aliased)
         const query = `
             SELECT 
                 u.id, 
-                u.fullName, 
+                u.fullname as "fullName", 
                 u.email, 
-                u.phoneNumber, 
+                u.phonenumber as "phoneNumber", 
                 u.role, 
-                u.isApproved, 
-                u.createdAt,
-                u.walletBalance,
-                s.status as subscriptionStatus,
-                p.name as planName
+                u.isapproved as "isApproved", 
+                u.createdat as "createdAt",
+                u.walletbalance as "walletBalance",
+                s.status as "subscriptionStatus",
+                p.name as "planName"
             FROM users u
             LEFT JOIN (
-                SELECT userId, status, planId
+                SELECT userid as "userId", status, planid as "planId"
                 FROM (
-                    SELECT userId, status, planId, ROW_NUMBER() OVER (PARTITION BY userId ORDER BY createdAt DESC) as rn
+                    SELECT userid, status, planid, ROW_NUMBER() OVER (PARTITION BY userid ORDER BY createdat DESC) as rn
                     FROM subscriptions
                 ) t
                 WHERE rn = 1
-            ) s ON u.id = s.userId
-            LEFT JOIN plans p ON s.planId = p.id
-            WHERE u.id = ?
+            ) s ON u.id = s."userId"
+            LEFT JOIN plans p ON s."planId" = p.id
+            WHERE u.id = $1
         `;
-        const [users] = await pool.query(query, [userId]);
+        const { rows: users } = await pool.query(query, [userId]);
 
         if (users.length === 0) {
             return res.status(404).json({ message: 'User not found' });
@@ -303,8 +305,8 @@ const getUserForAdjustment = async (req, res) => {
 const getUserTransactions = async (req, res) => {
     try {
         const userId = req.params.id;
-        const [rows] = await pool.query(
-            'SELECT * FROM transactions WHERE userId = ? ORDER BY createdAt DESC LIMIT 50',
+        const { rows } = await pool.query(
+            'SELECT * FROM transactions WHERE userid = $1 ORDER BY createdat DESC LIMIT 50',
             [userId]
         );
 

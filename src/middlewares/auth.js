@@ -9,7 +9,16 @@ const protect = async (req, res, next) => {
             token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-            const [rows] = await pool.query('SELECT id, fullName, email, role, isApproved FROM users WHERE id = ?', [decoded.id]);
+            // Postgres query fixes:
+            // Columns are stored lowercase (fullname, isapproved).
+            // Requesting "fullName" fails.
+            // We select lowercase column and alias to camelCase for the app.
+            const { rows } = await pool.query(
+                `SELECT id, fullname as "fullName", email, role, isapproved as "isApproved" 
+                 FROM users WHERE id = $1`,
+                [decoded.id]
+            );
+
             req.user = rows[0];
 
             if (!req.user) {

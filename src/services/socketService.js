@@ -74,7 +74,8 @@ const initSocket = (server) => {
 // Helper to update DB status
 const updateUserStatus = async (userId, status) => {
     try {
-        await pool.query('UPDATE users SET status = ?, lastActiveAt = NOW() WHERE id = ?', [status, userId]);
+        // Postgres: Columns are lowercase (status, lastactiveat)
+        await pool.query('UPDATE users SET status = $1, lastactiveat = NOW() WHERE id = $2', [status, userId]);
     } catch (error) {
         console.error(`[Socket] Failed to update user ${userId} status to ${status}:`, error.message);
     }

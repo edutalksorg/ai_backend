@@ -3,13 +3,13 @@ const pool = require('../config/db');
 const createPlanTable = async () => {
   const query = `
     CREATE TABLE IF NOT EXISTS plans (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+      id SERIAL PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
       description TEXT,
       price DECIMAL(10, 2) NOT NULL,
       currency VARCHAR(10) DEFAULT 'INR',
-      billingCycle ENUM('Monthly', 'Yearly', 'Quarterly', 'Free') NOT NULL,
-      features JSON,
+      billingCycle VARCHAR(50) NOT NULL CHECK (billingCycle IN ('Monthly', 'Yearly', 'Quarterly', 'Free')),
+      features JSONB,
       isActive BOOLEAN DEFAULT TRUE,
       displayOrder INT DEFAULT 0,
       trialDays INT DEFAULT 0,

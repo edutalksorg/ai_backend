@@ -12,7 +12,7 @@ const registerUser = async (req, res) => {
     try {
         const { fullName, email, password, role, phoneNumber, referralCode } = req.body;
 
-        const [userExists] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        const { rows: userExists } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
         if (userExists.length > 0) {
             return res.status(400).json({ message: 'User already exists' });
@@ -21,43 +21,48 @@ const registerUser = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Normalize role: Capitalize first letter (e.g., 'instructor' -> 'Instructor')
+        // Normalize role
         const normalizedRole = role ? role.charAt(0).toUpperCase() + role.slice(1).toLowerCase() : 'User';
-
         const isAdmin = normalizedRole === 'Admin' || normalizedRole === 'SuperAdmin';
 
-        const [result] = await pool.query(
-            'INSERT INTO users (fullName, email, password, role, phoneNumber, isVerified, verificationToken, verificationTokenExpires, isApproved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        // Insert User - Postgres returns valid types
+        // Note: isVerified etc will be checked against lowercase column names in DB if we query them back
+        // But here we insert.
+        // My userModel uses standard unquoted identifiers which are case-insensitive (stored as lowercase).
+        // So params to INSERT should map correctly to columns.
+        const { rows: result } = await pool.query(
+            `INSERT INTO users (fullName, email, password, role, phoneNumber, isVerified, verificationToken, verificationTokenExpires, isApproved) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
                 fullName,
                 email,
                 hashedPassword,
                 normalizedRole,
                 phoneNumber || null,
-                isAdmin, // isVerified: Auto-verify Admins
-                isAdmin ? null : crypto.randomBytes(32).toString('hex'), // token: None for Admins
-                isAdmin ? null : new Date(Date.now() + 24 * 60 * 60 * 1000), // expires: None for Admins
-                normalizedRole === 'User' || isAdmin ? 1 : 0 // isApproved: Auto-approve Users and Admins, but not Instructors
+                isAdmin,
+                isAdmin ? null : crypto.randomBytes(32).toString('hex'),
+                isAdmin ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
+                normalizedRole === 'User' || isAdmin ? true : false // Postgres boolean
             ]
         );
 
-        const userId = result.insertId;
-        const [newUser] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+        const userId = result[0].id;
+        const { rows: newUser } = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
 
         // --- ADDED: Automatic 24-hour Free Trial ---
         try {
             console.log(`🎁 Granting free trial to user: ${email}`);
             // 1. Get or create Trial Plan
-            let [plans] = await pool.query('SELECT id FROM plans WHERE name = "Free Trial" LIMIT 1');
+            let { rows: plans } = await pool.query('SELECT id FROM plans WHERE name = \'Free Trial\' LIMIT 1');
             let planId;
 
             if (plans.length === 0) {
                 // Create one if it doesn't exist
-                const [planResult] = await pool.query(
-                    'INSERT INTO plans (name, description, price, billingCycle, trialDays) VALUES (?, ?, ?, ?, ?)',
+                const { rows: planResult } = await pool.query(
+                    'INSERT INTO plans (name, description, price, billingCycle, trialDays) VALUES ($1, $2, $3, $4, $5) RETURNING id',
                     ['Free Trial', '24-hour full access trial', 0, 'Free', 1]
                 );
-                planId = planResult.insertId;
+                planId = planResult[0].id; // Postgres RETURNING id
                 console.log('✅ Created "Free Trial" plan.');
             } else {
                 planId = plans[0].id;
@@ -65,10 +70,11 @@ const registerUser = async (req, res) => {
 
             // 2. Create subscription
             const startDate = new Date();
-            const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000); // 24 hours from now
+            const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
 
             await pool.query(
-                'INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) VALUES (?, ?, ?, ?, ?, ?)',
+                `INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) 
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
                 [userId, planId, 'active', startDate, endDate, 'paid']
             );
             console.log(`✅ 24-hour trial activated for ${email}. Expires: ${endDate.toLocaleString()}`);
@@ -76,14 +82,14 @@ const registerUser = async (req, res) => {
             console.error('❌ Failed to grant free trial:', trialError.message);
         }
 
-        // Send verification email (ONLY for Students and Instructors)
+        // Send verification email
         if (!isAdmin) {
             try {
+                // newUser[0] keys are lowercase in PG: email, fullname, verificationtoken
                 console.log('📧 Calling sendVerificationEmail for:', newUser[0].email);
-                await sendVerificationEmail(newUser[0].email, newUser[0].fullName, newUser[0].verificationToken);
+                await sendVerificationEmail(newUser[0].email, newUser[0].fullname, newUser[0].verificationtoken);
             } catch (emailError) {
                 console.error('Failed to send verification email:', emailError);
-                // We still proceed with registration, user can resend later
             }
         }
 
@@ -93,14 +99,15 @@ const registerUser = async (req, res) => {
                 console.log(`🔗 Processing referral code: ${referralCode} for new user: ${email}`);
 
                 // 1. Find referrer
-                const [referrers] = await pool.query('SELECT id, fullName FROM users WHERE referralCode = ?', [referralCode]);
+                const { rows: referrers } = await pool.query('SELECT id, fullName as "fullName" FROM users WHERE referralCode = $1', [referralCode]);
+                // Using alias here to keep it clean, but could use lowercase logic too.
 
                 if (referrers.length > 0) {
                     const referrer = referrers[0];
                     console.log(`👤 Found referrer: ${referrer.fullName} (ID: ${referrer.id})`);
 
                     // 2. Fetch referral settings
-                    const [settingsRows] = await pool.query('SELECT * FROM settings WHERE setting_key LIKE "referral_%"');
+                    const { rows: settingsRows } = await pool.query('SELECT * FROM settings WHERE setting_key LIKE \'referral_%\'');
                     const settings = {};
                     settingsRows.forEach(row => settings[row.setting_key] = row.setting_value);
 
@@ -113,38 +120,33 @@ const registerUser = async (req, res) => {
 
                         // 3. Update referrer's wallet
                         if (referrerReward > 0) {
-                            await pool.query('UPDATE users SET walletBalance = walletBalance + ? WHERE id = ?', [referrerReward, referrer.id]);
+                            await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [referrerReward, referrer.id]);
 
                             // Log transaction for referrer
                             await pool.query(
-                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES (?, ?, ?, ?, ?)',
+                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
                                 [referrer.id, referrerReward, 'credit', 'completed', `Referral reward for inviting ${fullName}`]
                             );
                         }
 
                         // 4. Update referee's wallet
                         if (refereeReward > 0) {
-                            await pool.query('UPDATE users SET walletBalance = walletBalance + ? WHERE id = ?', [refereeReward, userId]);
+                            await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [refereeReward, userId]);
 
                             // Log transaction for referee
                             await pool.query(
-                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES (?, ?, ?, ?, ?)',
+                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
                                 [userId, refereeReward, 'credit', 'completed', `Referral bonus for joining via ${referrer.fullName}`]
                             );
                         }
 
                         // 5. Record referral
                         await pool.query(
-                            'INSERT INTO referrals (referrerId, referredUserId, referralCode, status, rewardAmount) VALUES (?, ?, ?, ?, ?)',
+                            'INSERT INTO referrals (referrerId, referredUserId, referralCode, status, rewardAmount) VALUES ($1, $2, $3, $4, $5)',
                             [referrer.id, userId, referralCode, 'completed', referrerReward]
                         );
-
                         console.log('✅ Referral rewards applied successfully.');
-                    } else {
-                        console.log('⚠️ Referral system is currently inactive.');
                     }
-                } else {
-                    console.log('⚠️ Invalid referral code provided.');
                 }
             } catch (referralError) {
                 console.error('❌ Failed to process referral:', referralError.message);
@@ -173,15 +175,16 @@ const registerUser = async (req, res) => {
 // @access  Public
 const loginUser = async (req, res) => {
     try {
-        const { identifier, password } = req.body; // frontend sends identifier (email/username)
+        const { identifier, password } = req.body;
 
-        const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [identifier]);
+        // select * returns lowercase columns
+        const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [identifier]);
         const user = users[0];
 
         if (user && (await bcrypt.compare(password, user.password))) {
-            // Verification check: Only required for Students and Instructors
             const needsVerification = user.role === 'User' || user.role === 'Instructor';
-            if (needsVerification && !user.isVerified) {
+            // uses lowercase access
+            if (needsVerification && !user.isverified) {
                 return res.status(401).json({
                     success: false,
                     message: 'Please verify your email before logging in.',
@@ -189,17 +192,17 @@ const loginUser = async (req, res) => {
                 });
             }
 
-            // Auto-approve 'User' role on successful email verification/login if not already approved
-            if (user.role === 'User' && !user.isApproved) {
-                await pool.query('UPDATE users SET isApproved = 1 WHERE id = ?', [user.id]);
-                user.isApproved = 1;
+            // user.isapproved (lowercase)
+            if (user.role === 'User' && !user.isapproved) {
+                await pool.query('UPDATE users SET isApproved = TRUE WHERE id = $1', [user.id]);
+                user.isapproved = true;
             }
 
             res.json({
                 success: true,
                 data: {
                     id: user.id,
-                    fullName: user.fullName,
+                    fullName: user.fullname,
                     email: user.email,
                     role: user.role,
                     token: generateToken(user.id, user.role),
@@ -224,43 +227,36 @@ const getProfile = async (req, res) => {
     });
 };
 
-// @desc    Forgot Password - generate token
+// @desc    Forgot Password
 // @route   POST /api/v1/auth/forgot-password
 // @access  Public
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
         if (users.length === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
         const user = users[0];
-
-        // Generate Token
         const resetToken = crypto.randomBytes(20).toString('hex');
-
-        // Hash token and set to resetPasswordToken field
         const resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
         const resetPasswordExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 Minutes
 
         await pool.query(
-            'UPDATE users SET resetPasswordToken = ?, resetPasswordExpire = ? WHERE id = ?',
+            'UPDATE users SET resetPasswordToken = $1, resetPasswordExpire = $2 WHERE id = $3',
             [resetPasswordToken, resetPasswordExpire, user.id]
         );
 
-        // Construct Link
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}&userId=${user.id}`;
 
-        // Send Email
         try {
-            await sendPasswordResetEmail(user.email, user.fullName || 'User', resetUrl);
+            await sendPasswordResetEmail(user.email, user.fullname || 'User', resetUrl);
             res.status(200).json({ success: true, message: 'Password reset email sent' });
         } catch (mailError) {
             console.error('Mail delivery failed:', mailError);
-            // Fallback for debugging if email fails
             console.log(`Fallback Link: ${resetUrl}`);
             res.status(500).json({ message: 'Error sending email, but token generated.' });
         }
@@ -277,13 +273,12 @@ const forgotPassword = async (req, res) => {
 // @access  Public
 const resetPassword = async (req, res) => {
     try {
-        const { userId, token, newPassword } = req.body; // Expect simplified flow or token in body
-        // Note: Frontend might send token in query or body. Adjust as needed. 
+        const { userId, token, newPassword } = req.body;
 
         const resetPasswordToken = crypto.createHash('sha256').update(token).digest('hex');
 
-        const [users] = await pool.query(
-            'SELECT * FROM users WHERE id = ? AND resetPasswordToken = ? AND resetPasswordExpire > NOW()',
+        const { rows: users } = await pool.query(
+            'SELECT * FROM users WHERE id = $1 AND resetPasswordToken = $2 AND resetPasswordExpire > NOW()',
             [userId, resetPasswordToken]
         );
 
@@ -292,13 +287,11 @@ const resetPassword = async (req, res) => {
         }
 
         const user = users[0];
-
-        // Set new password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(newPassword, salt);
 
         await pool.query(
-            'UPDATE users SET password = ?, resetPasswordToken = NULL, resetPasswordExpire = NULL WHERE id = ?',
+            'UPDATE users SET password = $1, resetPasswordToken = NULL, resetPasswordExpire = NULL WHERE id = $2',
             [hashedPassword, user.id]
         );
 
@@ -318,8 +311,8 @@ const verifyEmail = async (req, res) => {
         const { token, email } = req.query;
 
         // 1. Try to find user by token
-        const [users] = await pool.query(
-            'SELECT * FROM users WHERE verificationToken = ? AND verificationTokenExpires > NOW()',
+        const { rows: users } = await pool.query(
+            'SELECT * FROM users WHERE verificationToken = $1 AND verificationTokenExpires > NOW()',
             [token]
         );
 
@@ -327,7 +320,7 @@ const verifyEmail = async (req, res) => {
             const user = users[0];
 
             await pool.query(
-                'UPDATE users SET isVerified = TRUE, verificationToken = NULL, verificationTokenExpires = NULL WHERE id = ?',
+                'UPDATE users SET isVerified = TRUE, verificationToken = NULL, verificationTokenExpires = NULL WHERE id = $1',
                 [user.id]
             );
 
@@ -337,11 +330,10 @@ const verifyEmail = async (req, res) => {
             });
         }
 
-        // 2. If token is invalid/not found, check if someone with this email is ALREADY verified
-        // This handles cases where people click the link twice or React double-executes useEffect
+        // 2. Check if already verified
         if (email) {
-            const [alreadyVerified] = await pool.query(
-                'SELECT * FROM users WHERE email = ? AND isVerified = TRUE',
+            const { rows: alreadyVerified } = await pool.query(
+                'SELECT * FROM users WHERE email = $1 AND isVerified = TRUE',
                 [email]
             );
 
@@ -371,14 +363,14 @@ const resendVerification = async (req, res) => {
     try {
         const { email } = req.body;
 
-        const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (users.length === 0) {
             return res.status(404).json({ message: 'User not found' });
         }
 
         const user = users[0];
 
-        if (user.isVerified) {
+        if (user.isverified) {
             return res.status(400).json({ message: 'Email is already verified' });
         }
 
@@ -386,11 +378,11 @@ const resendVerification = async (req, res) => {
         const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
         await pool.query(
-            'UPDATE users SET verificationToken = ?, verificationTokenExpires = ? WHERE id = ?',
+            'UPDATE users SET verificationToken = $1, verificationTokenExpires = $2 WHERE id = $3',
             [verificationToken, verificationTokenExpires, user.id]
         );
 
-        await sendVerificationEmail(user.email, user.fullName, verificationToken);
+        await sendVerificationEmail(user.email, user.fullname, verificationToken);
 
         res.json({ success: true, message: 'Verification email resent' });
 

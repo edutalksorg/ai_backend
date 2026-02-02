@@ -3,24 +3,23 @@ const pool = require('../config/db');
 const createTopicTable = async () => {
   const query = `
     CREATE TABLE IF NOT EXISTS topics (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+      id SERIAL PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       description TEXT,
-      content LONGTEXT,
+      content TEXT,
       category VARCHAR(100) DEFAULT 'General',
-      difficulty ENUM('Beginner', 'Intermediate', 'Advanced') DEFAULT 'Beginner',
+      difficulty VARCHAR(50) DEFAULT 'Beginner' CHECK (difficulty IN ('Beginner', 'Intermediate', 'Advanced')),
       estimatedTime INT DEFAULT 15,
       imageUrl TEXT,
-      vocabularyList JSON,
-      discussionPoints JSON,
+      vocabularyList JSONB,
+      discussionPoints JSONB,
       instructorId INT NOT NULL,
-      status ENUM('draft', 'published', 'archived') DEFAULT 'draft',
+      status VARCHAR(50) DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
       isFeatured BOOLEAN DEFAULT FALSE,
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (instructorId) REFERENCES users(id)
     )
   `;
-
   await pool.query(query);
 };
 

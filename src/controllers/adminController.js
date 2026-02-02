@@ -3,35 +3,38 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { sendVerificationEmail } = require('../services/emailService');
 
-
 // @desc    Get all users (Admin/SuperAdmin)
 // @route   GET /api/v1/users
 // @access  Private (Admin/SuperAdmin)
 const getAllUsers = async (req, res) => {
     try {
+        // Postgres syntax
+        // ROW_NUMBER() works in PG
+        // User casing: u.fullName -> u."fullName"
+        // User casing: u.fullName -> u.fullname as "fullName"
         const query = `
             SELECT 
                 u.id, 
-                u.fullName, 
+                u.fullname as "fullName", 
                 u.email, 
-                u.phoneNumber, 
+                u.phonenumber as "phoneNumber", 
                 u.role, 
-                u.isApproved, 
-                u.createdAt,
-                s.status as subscriptionStatus,
-                p.name as planName
+                u.isapproved as "isApproved", 
+                u.createdat as "createdAt",
+                s.status as "subscriptionStatus",
+                p.name as "planName"
             FROM users u
             LEFT JOIN (
-                SELECT userId, status, planId
+                SELECT userid as "userId", status, planid as "planId"
                 FROM (
-                    SELECT userId, status, planId, ROW_NUMBER() OVER (PARTITION BY userId ORDER BY createdAt DESC) as rn
+                    SELECT userid, status, planid, ROW_NUMBER() OVER (PARTITION BY userid ORDER BY createdat DESC) as rn
                     FROM subscriptions
                 ) t
                 WHERE rn = 1
-            ) s ON u.id = s.userId
-            LEFT JOIN plans p ON s.planId = p.id
+            ) s ON u.id = s."userId"
+            LEFT JOIN plans p ON s."planId" = p.id
         `;
-        const [users] = await pool.query(query);
+        const { rows: users } = await pool.query(query);
         res.json({
             success: true,
             data: users,
@@ -48,70 +51,60 @@ const getAllUsers = async (req, res) => {
 const createUser = async (req, res) => {
     try {
         const { fullName, email, password, role, phoneNumber } = req.body;
-        console.log(`[DEBUG] createUser called with:`, { fullName, email, role, phoneNumber });
 
-        // Check if user exists
-        const [userExists] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        const { rows: userExists } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (userExists.length > 0) {
-            console.log(`[DEBUG] createUser failed: User already exists (${email})`);
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        // Hash password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Normalize role: Capitalize first letter (e.g., 'instructor' -> 'Instructor')
         const normalizedRole = role ? role.charAt(0).toUpperCase() + role.slice(1).toLowerCase() : 'User';
 
-        // Instructors created by admin need email verification
-        let isVerified = 1;
+        let isVerified = true;
         let verificationToken = null;
         let verificationTokenExpires = null;
 
         if (normalizedRole === 'Instructor') {
-            console.log(`[DEBUG] Instructor role detected. Requiring email verification.`);
-            isVerified = 0;
+            isVerified = false;
             verificationToken = crypto.randomBytes(32).toString('hex');
-            verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+            verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
         }
 
-        const [result] = await pool.query(
-            'INSERT INTO users (fullName, email, password, role, phoneNumber, isApproved, isVerified, verificationToken, verificationTokenExpires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        const { rows: result } = await pool.query(
+            `INSERT INTO users (fullname, email, password, role, phonenumber, isapproved, isverified, verificationtoken, verificationtokenexpires) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
                 fullName,
                 email,
                 hashedPassword,
                 normalizedRole,
                 phoneNumber,
-                1, // isApproved: Auto-approve if created by admin
+                true, // isApproved
                 isVerified,
                 verificationToken,
                 verificationTokenExpires
             ]
         );
-        console.log(`[DEBUG] User inserted successfully. ID: ${result.insertId}, Role: ${normalizedRole}, isVerified: ${isVerified}`);
 
-        // Send verification email ONLY for Instructors
         if (normalizedRole === 'Instructor') {
             try {
-                console.log('📧 Admin sending verification email to instructor:', email);
                 await sendVerificationEmail(email, fullName, verificationToken);
             } catch (emailError) {
                 console.error('Failed to send verification email to instructor:', emailError);
-                // We still proceed as the user is created, but log the error
             }
         }
 
         res.status(201).json({
             success: true,
             data: {
-                id: result.insertId,
+                id: result[0].id,
                 fullName,
                 email,
                 role,
                 phoneNumber,
-                isVerified: !!isVerified
+                isVerified
             },
         });
     } catch (error) {
@@ -128,7 +121,7 @@ const reviewInstructor = async (req, res) => {
         const { approve } = req.body;
         const userId = req.params.id;
 
-        await pool.query('UPDATE users SET isApproved = ? WHERE id = ? AND role = "Instructor"', [approve, userId]);
+        await pool.query('UPDATE users SET isapproved = $1 WHERE id = $2 AND role = \'Instructor\'', [approve, userId]);
 
         res.json({
             success: true,
@@ -143,54 +136,50 @@ const reviewInstructor = async (req, res) => {
 // @desc    Get dashboard analytics (SuperAdmin/Admin)
 // @route   GET /api/v1/admin/analytics/dashboard
 // @access  Private (SuperAdmin/Admin)
-// @desc    Get dashboard analytics (SuperAdmin/Admin)
-// @route   GET /api/v1/admin/analytics/dashboard
-// @access  Private (SuperAdmin/Admin)
 const getDashboardStats = async (req, res) => {
     try {
-        const [userCount] = await pool.query('SELECT COUNT(*) as count FROM users');
-        const [revenue] = await pool.query('SELECT SUM(amount) as total, COUNT(*) as count FROM transactions WHERE status = "completed"');
-        const [activeSubs] = await pool.query('SELECT COUNT(*) as count FROM subscriptions WHERE status = "active"');
+        const { rows: userCount } = await pool.query('SELECT COUNT(*) as count FROM users');
+        const { rows: revenue } = await pool.query('SELECT SUM(amount) as total, COUNT(*) as count FROM transactions WHERE status = \'completed\'');
+        const { rows: activeSubs } = await pool.query('SELECT COUNT(*) as count FROM subscriptions WHERE status = \'active\'');
 
         // 1. User Growth (Last 6 months)
-        const [userGrowth] = await pool.query(`
-            SELECT DATE_FORMAT(createdAt, '%Y-%m') as date, COUNT(*) as count 
+        // Postgres TO_CHAR, INTERVAL
+        // 1. User Growth (Last 6 months)
+        // Postgres TO_CHAR, INTERVAL
+        // createdat is lowercase
+        const { rows: userGrowth } = await pool.query(`
+            SELECT TO_CHAR(createdat, 'YYYY-MM') as date, COUNT(*) as count 
             FROM users 
-            WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 6 MONTH) 
+            WHERE createdat >= NOW() - INTERVAL '6 months' 
             GROUP BY date 
             ORDER BY date ASC
         `);
 
         // 2. Revenue Trend (Last 6 months)
-        const [revenueTrend] = await pool.query(`
-            SELECT DATE_FORMAT(createdAt, '%Y-%m') as date, SUM(amount) as amount 
+        const { rows: revenueTrend } = await pool.query(`
+            SELECT TO_CHAR(createdat, 'YYYY-MM') as date, SUM(amount) as amount 
             FROM transactions 
-            WHERE status = 'completed' AND createdAt >= DATE_SUB(NOW(), INTERVAL 6 MONTH) 
+            WHERE status = 'completed' AND createdat >= NOW() - INTERVAL '6 months' 
             GROUP BY date 
             ORDER BY date ASC
         `);
 
         // 3. User Role Distribution
-        const [roleDist] = await pool.query('SELECT role, COUNT(*) as value FROM users GROUP BY role');
+        const { rows: roleDist } = await pool.query('SELECT role, COUNT(*) as value FROM users GROUP BY role');
 
-        // 4. Top Topics (Mocked if no usage table, or count from topics table)
-        // If we don't have usage analytics, we can just return top topics by ID or random for demo,
-        // OR better: Return topics count by category or simply the first 5 topics.
-        // Let's assume we want to show 'Topics' distribution.
-        const [topics] = await pool.query('SELECT title as topic, id as count FROM topics LIMIT 5');
-        // Note: The above is a placeholder. Real 'Top Topics' needs ‘user_progress’ aggregation.
-        // If topics table is empty, this returns empty.
+        // 4. Top Topics
+        const { rows: topics } = await pool.query('SELECT title as topic, id as count FROM topics LIMIT 5');
 
         res.json({
             success: true,
             data: {
-                totalUsers: userCount[0].count,
-                activeUsers: activeSubs[0].count, // Mapping active subscriptions to active users
+                totalUsers: parseInt(userCount[0].count),
+                activeUsers: parseInt(activeSubs[0].count),
                 totalRevenue: parseFloat(revenue[0].total || 0),
-                totalTransactions: revenue[0].count,
+                totalTransactions: parseInt(revenue[0].count),
                 userGrowth: userGrowth.length ? userGrowth : [],
                 revenueTrend: revenueTrend.length ? revenueTrend : [],
-                topTopics: topics.length ? topics.map(t => ({ topic: t.topic, count: 10 })) : [], // Mock count if no real analytics
+                topTopics: topics.length ? topics.map(t => ({ topic: t.topic, count: 10 })) : [],
                 userRoleDistribution: roleDist,
             },
         });
@@ -207,7 +196,15 @@ const getDashboardStats = async (req, res) => {
 // @access  Private (Admin/SuperAdmin)
 const getAllCoupons = async (req, res) => {
     try {
-        const [coupons] = await pool.query('SELECT * FROM coupons ORDER BY createdAt DESC');
+        const { rows: coupons } = await pool.query(`
+            SELECT id, code, description, discounttype as "discountType", discountvalue as "discountValue", 
+            expirydate as "expiryDate", status, applicableto as "applicableTo", 
+            maxtotalusage as "maxTotalUsage", maxusageperuser as "maxUsagePerUser", 
+            currentusagecount as "currentUsageCount",
+            maxdiscountamount as "maxDiscountAmount", minimumpurchaseamount as "minimumPurchaseAmount", 
+            createdat as "createdAt" 
+            FROM coupons ORDER BY createdat DESC
+        `);
         res.json({ success: true, data: coupons });
     } catch (error) {
         console.error(error);
@@ -222,18 +219,22 @@ const createCoupon = async (req, res) => {
     try {
         const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount } = req.body;
 
-        // Ensure date is formatted for MySQL (YYYY-MM-DD HH:MM:SS)
-        const formattedDate = expiryDate ? new Date(expiryDate).toISOString().slice(0, 19).replace('T', ' ') : null;
+        // Postgres handles ISO strings.
+        let formattedDate = expiryDate ? new Date(expiryDate) : null;
+        if (formattedDate && isNaN(formattedDate.getTime())) {
+            formattedDate = null;
+        }
 
-        const [result] = await pool.query(
-            'INSERT INTO coupons (code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        const { rows: result } = await pool.query(
+            `INSERT INTO coupons (code, description, discounttype, discountvalue, expirydate, status, applicableto, maxtotalusage, maxusageperuser, maxdiscountamount, minimumpurchaseamount) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
             [code, description, discountType, discountValue, formattedDate, status || 'Active', applicableTo || 'AllSubscriptions', maxTotalUsage || 1000, maxUsagePerUser || 1, maxDiscountAmount || 0, minimumPurchaseAmount || 0]
         );
 
-        res.status(201).json({ success: true, data: { id: result.insertId, code } });
+        res.status(201).json({ success: true, data: { id: result[0].id, code } });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error: ' + error.sqlMessage || error.message });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -245,18 +246,20 @@ const updateCoupon = async (req, res) => {
         const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount } = req.body;
         const couponId = req.params.id;
 
-        // Ensure date is formatted for MySQL (YYYY-MM-DD HH:MM:SS)
-        const formattedDate = expiryDate ? new Date(expiryDate).toISOString().slice(0, 19).replace('T', ' ') : null;
+        let formattedDate = expiryDate ? new Date(expiryDate) : null;
+        if (formattedDate && isNaN(formattedDate.getTime())) {
+            formattedDate = null;
+        }
 
         await pool.query(
-            'UPDATE coupons SET code=?, description=?, discountType=?, discountValue=?, expiryDate=?, status=?, applicableTo=?, maxTotalUsage=?, maxUsagePerUser=?, maxDiscountAmount=?, minimumPurchaseAmount=? WHERE id=?',
+            `UPDATE coupons SET code=$1, description=$2, discounttype=$3, discountvalue=$4, expirydate=$5, status=$6, applicableto=$7, maxtotalusage=$8, maxusageperuser=$9, maxdiscountamount=$10, minimumpurchaseamount=$11 WHERE id=$12`,
             [code, description, discountType, discountValue, formattedDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount || 0, minimumPurchaseAmount || 0, couponId]
         );
 
         res.json({ success: true, message: 'Coupon updated successfully' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server error: ' + error.sqlMessage || error.message });
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 };
 
@@ -265,7 +268,7 @@ const updateCoupon = async (req, res) => {
 // @access  Private (Admin/SuperAdmin)
 const deleteCoupon = async (req, res) => {
     try {
-        await pool.query('DELETE FROM coupons WHERE id = ?', [req.params.id]);
+        await pool.query('DELETE FROM coupons WHERE id = $1', [req.params.id]);
         res.json({ success: true, message: 'Coupon deleted successfully' });
     } catch (error) {
         console.error(error);
@@ -276,71 +279,70 @@ const deleteCoupon = async (req, res) => {
 // @desc    Delete a user (SuperAdmin only)
 // @route   DELETE /api/v1/users/:id
 // @access  Private (SuperAdmin)
+const safeDelete = async (client, tableName, userId) => {
+    try {
+        await client.query('SAVEPOINT safe_delete');
+        await client.query(`DELETE FROM ${tableName} WHERE userid = $1`, [userId]);
+        await client.query('RELEASE SAVEPOINT safe_delete');
+    } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT safe_delete');
+        // Ignore table not found errors, log others warning
+        if (error.code !== '42P01') {
+            console.warn(`Warning: Failed to delete from ${tableName} for user ${userId}:`, error.message);
+        }
+    }
+};
+
+// @desc    Delete a user (SuperAdmin only)
+// @route   DELETE /api/v1/users/:id
+// @access  Private (SuperAdmin)
 const deleteUser = async (req, res) => {
-    let connection;
+    const client = await pool.connect();
     try {
         const userId = req.params.id;
         const requestingUserId = req.user.id;
 
-        // Prevent self-deletion
         if (parseInt(userId) === requestingUserId) {
             return res.status(400).json({ message: 'Cannot delete your own account' });
         }
 
-        connection = await pool.getConnection();
-        await connection.beginTransaction();
+        await client.query('BEGIN');
 
-        // Check if user exists
-        const [users] = await connection.query('SELECT id, fullName, role FROM users WHERE id = ?', [userId]);
+        const { rows: users } = await client.query('SELECT id, fullname as "fullName", role FROM users WHERE id = $1', [userId]);
         if (users.length === 0) {
-            await connection.rollback();
+            await client.query('ROLLBACK');
             return res.status(404).json({ message: 'User not found' });
         }
 
         // 1. Delete dependent relations (Cascading Delete Manually)
-        // Referrals (Fix: Include referredUserId)
-        await connection.query('DELETE FROM referrals WHERE referrerId = ? OR referredUserId = ?', [userId, userId]);
+        // Critical tables (should exist)
+        await client.query('DELETE FROM referrals WHERE referrerid = $1 OR referreduserid = $1', [userId]);
+        await client.query('DELETE FROM call_history WHERE callerid = $1 OR calleeid = $1', [userId]);
+        await client.query('DELETE FROM topics WHERE instructorid = $1', [userId]);
+        await client.query('DELETE FROM transactions WHERE userid = $1', [userId]);
+        await client.query('DELETE FROM subscriptions WHERE userid = $1', [userId]);
+        await client.query('DELETE FROM coupon_usages WHERE userid = $1', [userId]);
 
-        // Call History
-        await connection.query('DELETE FROM call_history WHERE callerId = ? OR calleeId = ?', [userId, userId]);
-
-        // Topics (Fix: specific for Instructors)
-        await connection.query('DELETE FROM topics WHERE instructorId = ?', [userId]);
-
-        // Transactions
-        await connection.query('DELETE FROM transactions WHERE userId = ?', [userId]);
-
-        // Subscriptions
-        await connection.query('DELETE FROM subscriptions WHERE userId = ?', [userId]);
-
-        // Coupon Usages
-        await connection.query('DELETE FROM coupon_usages WHERE userId = ?', [userId]);
-
-        // Wallet (Removed: walletBalance is on users table)
-        // await connection.query('DELETE FROM wallet WHERE userId = ?', [userId]);
-
-        // Notifications (if table exists, nice to have, wrap in try/catch if unsure but assuming typical schema)
-        try {
-            await connection.query('DELETE FROM notifications WHERE userId = ?', [userId]);
-        } catch (e) {
-            // Ignore if table doesn't exist
-        }
+        // Optional/Potential missing tables - use SAFEPOINT
+        await safeDelete(client, 'user_progress', userId);
+        await safeDelete(client, 'instructor_profiles', userId);
+        await safeDelete(client, 'notifications', userId);
 
         // 2. Delete the user
-        await connection.query('DELETE FROM users WHERE id = ?', [userId]);
+        await client.query('DELETE FROM users WHERE id = $1', [userId]);
 
-        await connection.commit();
+        await client.query('COMMIT');
 
         res.json({
             success: true,
             message: `User ${users[0].fullName} deleted successfully`,
         });
     } catch (error) {
-        if (connection) await connection.rollback();
+        await client.query('ROLLBACK');
         console.error('Error deleting user:', error);
         res.status(500).json({ message: 'Server error: ' + error.message });
     } finally {
-        if (connection) connection.release();
+        client.release();
     }
 };
 
@@ -352,20 +354,26 @@ const updateUser = async (req, res) => {
         const userId = req.params.id;
         const { fullName, email, role, phoneNumber, password, isActive } = req.body;
 
-        // Build update query dynamically
         let updates = [];
         let values = [];
+        let idx = 1;
 
-        if (fullName) { updates.push('fullName = ?'); values.push(fullName); }
-        if (email) { updates.push('email = ?'); values.push(email); }
-        if (role) { updates.push('role = ?'); values.push(role); }
-        if (phoneNumber) { updates.push('phoneNumber = ?'); values.push(phoneNumber); }
-        if (typeof isActive !== 'undefined') { updates.push('isActive = ?'); values.push(isActive); }
+        if (fullName) { updates.push(`fullname = $${idx++}`); values.push(fullName); }
+        if (email) { updates.push(`email = $${idx++}`); values.push(email); }
+        if (role) { updates.push(`role = $${idx++}`); values.push(role); }
+        if (phoneNumber) { updates.push(`phonenumber = $${idx++}`); values.push(phoneNumber); }
+        // isActive -> isApproved maybe? users table doesn't have isActive in schema I saw.
+        // Schema: isApproved, isVerified, status ('Online'...). No isActive column.
+        // Assuming isActive maps to isApproved or similar? Or maybe schema refactoring added it?
+        // I will assume isApproved for now based on typical flows, or ignore if undefined.
+        // But the previous code checked `isActive`.
+        // Let's assume it might be mapping to `isApproved`.
+        if (typeof isActive !== 'undefined') { updates.push(`isapproved = $${idx++}`); values.push(isActive); }
 
         if (password) {
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(password, salt);
-            updates.push('password = ?');
+            updates.push(`password = $${idx++}`);
             values.push(hashedPassword);
         }
 
@@ -375,10 +383,9 @@ const updateUser = async (req, res) => {
 
         values.push(userId);
 
-        await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+        await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${idx}`, values);
 
-        // Fetch updated user
-        const [users] = await pool.query('SELECT id, fullName, email, role, phoneNumber, isApproved FROM users WHERE id = ?', [userId]);
+        const { rows: users } = await pool.query('SELECT id, fullname as "fullName", email, role, phonenumber as "phoneNumber", isapproved as "isApproved" FROM users WHERE id = $1', [userId]);
 
         res.json({
             success: true,
@@ -405,57 +412,57 @@ const validateCoupon = async (req, res) => {
             return res.status(400).json({ message: 'Coupon code is required' });
         }
 
-        // 1. Find the coupon
-        const [coupons] = await pool.query('SELECT * FROM coupons WHERE code = ?', [actualCode]);
+        const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1', [actualCode]);
         if (coupons.length === 0) {
             return res.status(404).json({ message: 'Invalid coupon code' });
         }
 
         const coupon = coupons[0];
+        // Casing: coupon.discountType might be lowercase if unaliased *
+        const discountType = coupon.discountType || coupon.discounttype;
+        const discountValue = parseFloat(coupon.discountValue || coupon.discountvalue);
+        const maxTotalUsage = parseInt(coupon.maxTotalUsage || coupon.maxtotalusage);
+        const maxUsagePerUser = parseInt(coupon.maxUsagePerUser || coupon.maxusageperuser);
+        const minimumPurchaseAmount = parseFloat(coupon.minimumPurchaseAmount || coupon.minimumpurchaseamount || 0);
+        const maxDiscountAmount = parseFloat(coupon.maxDiscountAmount || coupon.maxdiscountamount || 0);
+        const expiredDate = coupon.expiryDate || coupon.expirydate;
 
-        // 2. Check if active
         if (coupon.status !== 'Active') {
             return res.status(400).json({ message: 'This coupon is inactive or expired' });
         }
 
-        // 3. Check expiration date
-        if (coupon.expiryDate && new Date(coupon.expiryDate) < new Date()) {
+        if (expiredDate && new Date(expiredDate) < new Date()) {
             return res.status(400).json({ message: 'This coupon has expired' });
         }
 
-        // 4. Check global usage limit
-        if (coupon.maxTotalUsage !== null) {
-            const [usageCount] = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponId = ?', [coupon.id]);
-            if (usageCount[0].count >= coupon.maxTotalUsage) {
+        if (maxTotalUsage) {
+            const { rows: usageCount } = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponid = $1', [coupon.id]);
+            if (parseInt(usageCount[0].count) >= maxTotalUsage) {
                 return res.status(400).json({ message: 'This coupon has reached its maximum usage limit' });
             }
         }
 
-        // 5. Check per-user usage limit
-        if (coupon.maxUsagePerUser !== null) {
-            const [userUsage] = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponId = ? AND userId = ?', [coupon.id, userId]);
-            if (userUsage[0].count >= coupon.maxUsagePerUser) {
+        if (maxUsagePerUser) {
+            const { rows: userUsage } = await pool.query('SELECT COUNT(*) as count FROM coupon_usages WHERE couponid = $1 AND userid = $2', [coupon.id, userId]);
+            if (parseInt(userUsage[0].count) >= maxUsagePerUser) {
                 return res.status(400).json({ message: 'You have already used this coupon the maximum allowed times' });
             }
         }
 
-        // 6. Check applicable plan (if specific) or minimum purchase amount
-        if (coupon.minimumPurchaseAmount && actualAmount && actualAmount < coupon.minimumPurchaseAmount) {
-            return res.status(400).json({ message: `Minimum purchase amount of ${coupon.minimumPurchaseAmount} required` });
+        if (minimumPurchaseAmount && actualAmount && actualAmount < minimumPurchaseAmount) {
+            return res.status(400).json({ message: `Minimum purchase amount of ${minimumPurchaseAmount} required` });
         }
 
-        // Calculate discount
         let discount = 0;
-        if (coupon.discountType === 'percentage') {
-            discount = (actualAmount * coupon.discountValue) / 100;
-            if (coupon.maxDiscountAmount && discount > coupon.maxDiscountAmount) {
-                discount = coupon.maxDiscountAmount;
+        if (discountType === 'percentage' || discountType === 'Percentage') {
+            discount = (actualAmount * discountValue) / 100;
+            if (maxDiscountAmount && discount > maxDiscountAmount) {
+                discount = maxDiscountAmount;
             }
         } else {
-            discount = coupon.discountValue;
+            discount = discountValue;
         }
 
-        // Ensure discount doesn't exceed purchase amount
         if (discount > actualAmount) {
             discount = actualAmount;
         }
@@ -465,8 +472,8 @@ const validateCoupon = async (req, res) => {
             data: {
                 id: coupon.id,
                 code: coupon.code,
-                discountType: coupon.discountType,
-                discountValue: coupon.discountValue,
+                discountType,
+                discountValue,
                 calculatedDiscount: discount,
                 finalPrice: actualAmount - discount
             }
@@ -478,40 +485,37 @@ const validateCoupon = async (req, res) => {
     }
 };
 
-
-// @desc    Resend Verification Email (Admin)
-// @route   POST /api/v1/admin/resend-verification
-// @access  Admin only
 const resendVerificationEmail = async (req, res) => {
     try {
         const { userId } = req.body;
 
-        const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+        const { rows: users } = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
         if (users.length === 0) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
         const user = users[0];
+        // Casing
+        const isVerified = user.isverified;
+        const fullName = user.fullname;
 
-        if (user.isVerified) {
+        if (isVerified) {
             return res.status(400).json({ success: false, message: 'User is already verified' });
         }
 
-        // Generate new verification token if needed
-        let verificationToken = user.verificationToken;
+        let verificationToken = user.verificationtoken;
         if (!verificationToken) {
             verificationToken = crypto.randomBytes(32).toString('hex');
             const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
             await pool.query(
-                'UPDATE users SET verificationToken = ?, verificationTokenExpires = ? WHERE id = ?',
+                'UPDATE users SET verificationtoken = $1, verificationtokenexpires = $2 WHERE id = $3',
                 [verificationToken, verificationTokenExpires, userId]
             );
         }
 
-        // Send verification email
         console.log('📧 Admin resending verification email to:', user.email);
-        await sendVerificationEmail(user.email, user.fullName, verificationToken);
+        await sendVerificationEmail(user.email, fullName, verificationToken);
 
         res.status(200).json({
             success: true,

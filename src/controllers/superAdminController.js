@@ -5,7 +5,11 @@ const pool = require('../config/db');
 // @access  Private (SuperAdmin)
 const getAllPermissions = async (req, res) => {
     try {
-        const [permissions] = await pool.query('SELECT * FROM permissions');
+        // Postgres unquoted columns are lowercase. Alias them for frontend consistency.
+        const { rows: permissions } = await pool.query(
+            `SELECT id, name, displayname as "displayName", module, action, description 
+             FROM permissions`
+        );
         res.json({ success: true, data: permissions });
     } catch (error) {
         console.error(error);
@@ -15,29 +19,24 @@ const getAllPermissions = async (req, res) => {
 
 // @desc    Get user permission overrides
 // @route   GET /api/v1/superadmin/users/:id/permissions
-// @route   GET /api/v1/permission-management/users/:id
 // @access  Private (SuperAdmin)
 const getUserPermissions = async (req, res) => {
     try {
         const userId = req.params.id;
 
-        // Get user's role first
-        const [users] = await pool.query('SELECT role FROM users WHERE id = ?', [userId]);
+        const { rows: users } = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
         const userRole = users[0]?.role || 'User';
 
-        // Get user-specific permission overrides
-        const [userPerms] = await pool.query(
-            'SELECT p.name, up.type FROM user_permissions up JOIN permissions p ON up.permissionId = p.id WHERE up.userId = ?',
+        const { rows: userPerms } = await pool.query(
+            'SELECT p.name, up.type FROM user_permissions up JOIN permissions p ON up.permissionid = p.id WHERE up.userid = $1',
             [userId]
         );
 
-        // Get role-based permissions
-        const [rolePerms] = await pool.query(
-            'SELECT p.name FROM role_permissions rp JOIN permissions p ON rp.permissionId = p.id WHERE rp.role = ?',
+        const { rows: rolePerms } = await pool.query(
+            'SELECT p.name FROM role_permissions rp JOIN permissions p ON rp.permissionid = p.id WHERE rp.role = $1',
             [userRole]
         );
 
-        // Separate into grant and revoke lists
         const grantedPermissions = userPerms
             .filter(up => up.type === 'grant')
             .map(up => up.name);
@@ -48,30 +47,17 @@ const getUserPermissions = async (req, res) => {
 
         const rolePermissions = rolePerms.map(rp => rp.name);
 
-        // Calculate effective permissions: role permissions + grants - revokes
-        const roleSet = new Set(rolePermissions);
-        const revokeSet = new Set(revokedPermissions);
-
-        // Start with role permissions
-        const effectiveSet = new Set(rolePermissions);
-
-        // Add grants
-        grantedPermissions.forEach(p => effectiveSet.add(p));
-
-        // Remove revokes
-        revokedPermissions.forEach(p => effectiveSet.delete(p));
-
-        const effectivePermissions = Array.from(effectiveSet);
-
         res.json({
             success: true,
             data: {
                 userId,
                 role: userRole,
-                effectivePermissions,
                 rolePermissions,
                 grantedPermissions,
-                revokedPermissions
+                revokedPermissions,
+                // Calculated effective permissions logic can be done on frontend or repeated here if needed
+                // Keeping original response structure
+                effectivePermissions: [...new Set([...rolePermissions, ...grantedPermissions])].filter(p => !revokedPermissions.includes(p))
             }
         });
     } catch (error) {
@@ -80,65 +66,63 @@ const getUserPermissions = async (req, res) => {
     }
 };
 
-// @desc    Update user permission override
+// @desc    Update user permission override (Single or Bulk)
 // @route   POST /api/v1/superadmin/users/:id/permissions
-// @route   PUT /api/v1/permission-management/users/:id (bulk)
 // @access  Private (SuperAdmin)
 const updateUserPermission = async (req, res) => {
     try {
         const userId = req.params.id;
-
-        // Check if this is a bulk update (from AdminManagementPage)
         const { grantPermissions, revokePermissions } = req.body;
 
+        // Bulk Update
         if (grantPermissions || revokePermissions) {
-            // Bulk update mode
             const toGrant = grantPermissions || [];
             const toRevoke = revokePermissions || [];
 
-            // Grant permissions
+            // Grant
             if (toGrant.length > 0) {
-                const [perms] = await pool.query('SELECT id, name FROM permissions WHERE name IN (?)', [toGrant]);
-                if (perms.length > 0) {
-                    const values = perms.map(p => [userId, p.id, 'grant']);
+                // Postgres ANY($1) for array
+                const { rows: perms } = await pool.query('SELECT id, name FROM permissions WHERE name = ANY($1)', [toGrant]);
+                for (const p of perms) {
                     await pool.query(
-                        'INSERT INTO user_permissions (userId, permissionId, type) VALUES ? ON DUPLICATE KEY UPDATE type = "grant"',
-                        [values]
+                        `INSERT INTO user_permissions (userid, permissionid, type) 
+                         VALUES ($1, $2, 'grant') 
+                         ON CONFLICT (userid, permissionid) DO UPDATE SET type = 'grant'`,
+                        [userId, p.id]
                     );
                 }
             }
 
-            // Revoke permissions
+            // Revoke
             if (toRevoke.length > 0) {
-                const [perms] = await pool.query('SELECT id, name FROM permissions WHERE name IN (?)', [toRevoke]);
-                if (perms.length > 0) {
-                    const values = perms.map(p => [userId, p.id, 'revoke']);
+                const { rows: perms } = await pool.query('SELECT id, name FROM permissions WHERE name = ANY($1)', [toRevoke]);
+                for (const p of perms) {
                     await pool.query(
-                        'INSERT INTO user_permissions (userId, permissionId, type) VALUES ? ON DUPLICATE KEY UPDATE type = "revoke"',
-                        [values]
+                        `INSERT INTO user_permissions (userid, permissionid, type) 
+                         VALUES ($1, $2, 'revoke') 
+                         ON CONFLICT (userid, permissionid) DO UPDATE SET type = 'revoke'`,
+                        [userId, p.id]
                     );
                 }
             }
-
             return res.json({ success: true, message: 'User permissions updated' });
         }
 
-        // Single permission update mode (legacy)
+        // Single Update (Legacy)
         let { permissionId, type, permissionName } = req.body;
 
-        // Frontend service sends permissionName for grant/revoke
         if (permissionName && !permissionId) {
-            const [perms] = await pool.query('SELECT id FROM permissions WHERE name = ?', [permissionName]);
+            const { rows: perms } = await pool.query('SELECT id FROM permissions WHERE name = $1', [permissionName]);
             if (perms.length > 0) permissionId = perms[0].id;
             else return res.status(404).json({ message: 'Permission not found' });
         }
 
         if (!type) {
-            // For legacy or reset single
-            await pool.query('DELETE FROM user_permissions WHERE userId = ? AND permissionId = ?', [userId, permissionId]);
+            await pool.query('DELETE FROM user_permissions WHERE userid = $1 AND permissionid = $2', [userId, permissionId]);
         } else {
             await pool.query(
-                'INSERT INTO user_permissions (userId, permissionId, type) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE type = ?',
+                `INSERT INTO user_permissions (userid, permissionid, type) VALUES ($1, $2, $3) 
+                 ON CONFLICT (userid, permissionid) DO UPDATE SET type = $4`,
                 [userId, permissionId, type, type]
             );
         }
@@ -163,7 +147,7 @@ const revokeUserPermission = async (req, res) => {
 const resetUserPermissions = async (req, res) => {
     try {
         const userId = req.params.id;
-        await pool.query('DELETE FROM user_permissions WHERE userId = ?', [userId]);
+        await pool.query('DELETE FROM user_permissions WHERE userid = $1', [userId]);
         res.json({ success: true, message: 'User permissions reset' });
     } catch (error) {
         console.error(error);
@@ -173,14 +157,13 @@ const resetUserPermissions = async (req, res) => {
 
 const getRolePermissions = async (req, res) => {
     try {
-        const { id: roleName } = req.params; // Frontend sends roleId as 'Admin', 'Instructor'
+        const { id: roleName } = req.params;
 
-        // Get all permissions assigned to this role
-        const [rolePerms] = await pool.query(`
+        const { rows: rolePerms } = await pool.query(`
             SELECT p.name 
             FROM role_permissions rp 
-            JOIN permissions p ON rp.permissionId = p.id 
-            WHERE rp.role = ?
+            JOIN permissions p ON rp.permissionid = p.id 
+            WHERE rp.role = $1
         `, [roleName]);
 
         const permissionNames = rolePerms.map(p => p.name);
@@ -191,7 +174,7 @@ const getRolePermissions = async (req, res) => {
                 roleId: roleName,
                 roleName: roleName,
                 permissions: permissionNames,
-                userCount: 0 // Mock count or fetch real count
+                userCount: 0
             }
         });
     } catch (error) {
@@ -205,17 +188,13 @@ const updateRolePermissions = async (req, res) => {
         const { id: roleName } = req.params;
         const { permissionNames } = req.body;
 
-        // 1. Clear existing
-        await pool.query('DELETE FROM role_permissions WHERE role = ?', [roleName]);
+        await pool.query('DELETE FROM role_permissions WHERE role = $1', [roleName]);
 
-        // 2. Insert new
         if (permissionNames && permissionNames.length > 0) {
-            // Get IDs
-            const [perms] = await pool.query('SELECT id, name FROM permissions WHERE name IN (?)', [permissionNames]);
+            const { rows: perms } = await pool.query('SELECT id, name FROM permissions WHERE name = ANY($1)', [permissionNames]);
 
-            if (perms.length > 0) {
-                const values = perms.map(p => [roleName, p.id]);
-                await pool.query('INSERT INTO role_permissions (role, permissionId) VALUES ?', [values]);
+            for (const p of perms) {
+                await pool.query('INSERT INTO role_permissions (role, permissionid) VALUES ($1, $2)', [roleName, p.id]);
             }
         }
 

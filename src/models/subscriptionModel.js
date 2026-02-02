@@ -3,15 +3,15 @@ const pool = require('../config/db');
 const createSubscriptionTable = async () => {
   const query = `
     CREATE TABLE IF NOT EXISTS subscriptions (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+      id SERIAL PRIMARY KEY,
       userId INT NOT NULL,
       planId INT NOT NULL,
-      status ENUM('active', 'expired', 'cancelled', 'pending') DEFAULT 'pending',
+      status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('active', 'expired', 'cancelled', 'pending')),
       startDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       endDate TIMESTAMP,
-      paymentStatus ENUM('paid', 'pending', 'failed', 'refunded', 'free', 'completed') DEFAULT 'pending',
+      paymentStatus VARCHAR(50) DEFAULT 'pending' CHECK (paymentStatus IN ('paid', 'pending', 'failed', 'refunded', 'free', 'completed')),
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (planId) REFERENCES plans(id)
     )

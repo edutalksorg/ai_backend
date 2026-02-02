@@ -7,22 +7,22 @@ const getProgressSummary = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const [completed] = await pool.query(
-            'SELECT COUNT(*) as count FROM user_progress WHERE userId = ? AND status = "completed"',
+        const { rows: completed } = await pool.query(
+            'SELECT COUNT(*) as count FROM user_progress WHERE userId = $1 AND status = \'completed\'',
             [userId]
         );
 
-        const [inProgress] = await pool.query(
-            'SELECT COUNT(*) as count FROM user_progress WHERE userId = ? AND status = "in_progress"',
+        const { rows: inProgress } = await pool.query(
+            'SELECT COUNT(*) as count FROM user_progress WHERE userId = $1 AND status = \'in_progress\'',
             [userId]
         );
 
         res.json({
             success: true,
             data: {
-                completedTopics: completed[0].count,
-                activeTopics: inProgress[0].count,
-                points: completed[0].count * 10,
+                completedTopics: parseInt(completed[0].count),
+                activeTopics: parseInt(inProgress[0].count),
+                points: parseInt(completed[0].count) * 10,
             },
         });
     } catch (error) {
@@ -42,17 +42,17 @@ const updateProfile = async (req, res) => {
 
         // Update users table with basic profile fields
         await pool.query(
-            'UPDATE users SET fullName = ?, phoneNumber = ? WHERE id = ?',
+            'UPDATE users SET fullName = $1, phoneNumber = $2 WHERE id = $3',
             [fullName, phoneNumber, userId]
         );
 
         // If user is an instructor, update instructor_profiles table
         if (userRole === 'Instructor') {
-            // Use INSERT ... ON DUPLICATE KEY UPDATE to handle both insert and update
+            // Postgres specific UPSERT
             await pool.query(
                 `INSERT INTO instructor_profiles (userId, bio, country) 
-                 VALUES (?, ?, ?) 
-                 ON DUPLICATE KEY UPDATE bio = VALUES(bio), country = VALUES(country)`,
+                 VALUES ($1, $2, $3) 
+                 ON CONFLICT (userId) DO UPDATE SET bio = EXCLUDED.bio, country = EXCLUDED.country`,
                 [userId, bio || null, country || null]
             );
         }
@@ -73,15 +73,16 @@ const updateProfile = async (req, res) => {
 const getUserProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const [users] = await pool.query(`
-            SELECT u.id, u.fullName, u.email, u.phoneNumber, u.role, u.isApproved, u.avatarUrl, u.walletBalance, u.referralCode, u.createdAt,
-                   s.status as subscriptionStatus, p.name as subscriptionPlan, s.endDate as trialEndDate,
+        const { rows: users } = await pool.query(`
+            SELECT u.id, u.fullName as "fullName", u.email, u.phoneNumber as "phoneNumber", u.role, u.isApproved as "isApproved", u.avatarUrl as "avatarUrl", 
+                   u.walletBalance as "walletBalance", u.referralCode as "referralCode", u.createdAt as "createdAt",
+                   s.status as "subscriptionStatus", p.name as "subscriptionPlan", s.endDate as "trialEndDate",
                    ip.bio, ip.country
             FROM users u
             LEFT JOIN subscriptions s ON u.id = s.userId AND s.status = 'active'
             LEFT JOIN plans p ON s.planId = p.id
             LEFT JOIN instructor_profiles ip ON u.id = ip.userId
-            WHERE u.id = ?
+            WHERE u.id = $1
             ORDER BY s.endDate DESC LIMIT 1
         `, [userId]);
 

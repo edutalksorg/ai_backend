@@ -17,15 +17,15 @@ const checkContentAccess = async (req, res, next) => {
         }
 
         // 2. Check for active PRO subscription
-        const [subs] = await pool.query(`
-            SELECT s.*, p.name as planName 
+        const { rows: subs } = await pool.query(`
+            SELECT s.*, p.name as "planName" 
             FROM subscriptions s 
-            JOIN plans p ON s.planId = p.id 
-            WHERE s.userId = ? AND s.status = 'active' AND s.endDate > NOW()
+            JOIN plans p ON s.planid = p.id 
+            WHERE s.userid = $1 AND s.status = 'active' AND s.enddate > NOW()
         `, [user.id]);
 
         if (subs.length > 0) {
-            const planName = subs[0].planName.toLowerCase();
+            const planName = (subs[0].planName || '').toLowerCase();
             if (planName.includes('monthly') ||
                 planName.includes('quarterly') ||
                 planName.includes('yearly') ||

@@ -2,12 +2,14 @@ const pool = require('../config/db');
 
 // Helper to ensure code exists
 const ensureReferralCode = async (userId) => {
-    let [user] = await pool.query('SELECT referralCode FROM users WHERE id = ?', [userId]);
+    // Postgres stores unquoted identifiers as lowercase
+    let { rows: user } = await pool.query('SELECT referralCode as "referralCode" FROM users WHERE id = $1', [userId]);
     let code = user[0]?.referralCode;
 
     if (!code) {
         code = 'REF' + userId + Math.random().toString(36).substring(7).toUpperCase();
-        await pool.query('UPDATE users SET referralCode = ? WHERE id = ?', [code, userId]);
+        // Update column referralcode
+        await pool.query('UPDATE users SET referralCode = $1 WHERE id = $2', [code, userId]);
     }
     return code;
 };
@@ -18,13 +20,14 @@ const ensureReferralCode = async (userId) => {
 const getMyCode = async (req, res) => {
     try {
         const code = await ensureReferralCode(req.user.id);
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         res.json({
             success: true,
             data: {
                 referralCode: code,
-                referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`,
-                code: code, // Alias for frontend
-                shareableUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}` // Alias for frontend
+                referralLink: `${frontendUrl}/register?ref=${code}`,
+                code: code,
+                shareableUrl: `${frontendUrl}/register?ref=${code}`
             }
         });
     } catch (error) {
@@ -41,9 +44,9 @@ const getReferralStats = async (req, res) => {
         const userId = req.user.id;
         const code = await ensureReferralCode(userId);
 
-        const [referrals] = await pool.query('SELECT COUNT(*) as count FROM referrals WHERE referrerId = ?', [userId]);
-        const [earnings] = await pool.query(
-            'SELECT SUM(rewardAmount) as total FROM referrals WHERE referrerId = ? AND status = "completed"', // Assuming status
+        const { rows: referrals } = await pool.query('SELECT COUNT(*) as count FROM referrals WHERE referrerId = $1', [userId]);
+        const { rows: earnings } = await pool.query(
+            'SELECT SUM(rewardAmount) as total FROM referrals WHERE referrerId = $1 AND status = \'completed\'',
             [userId]
         );
 
@@ -51,7 +54,7 @@ const getReferralStats = async (req, res) => {
             success: true,
             data: {
                 referralCode: code,
-                totalReferrals: referrals[0].count,
+                totalReferrals: parseInt(referrals[0].count),
                 totalEarnings: parseFloat(earnings[0].total || 0),
                 referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`
             }
@@ -69,19 +72,24 @@ const getReferralHistory = async (req, res) => {
     try {
         const userId = req.user.id;
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.pageSize) || 20; // Matches frontend 'pageSize' param
+        const limit = parseInt(req.query.pageSize) || 20;
         const offset = (page - 1) * limit;
 
-        const [rows] = await pool.query(`
-            SELECT r.*, u.fullName as refereeName, u.avatarUrl
+        // Alias necessary columns from join
+        // referredUserId -> referreduserid
+        // referrerId -> referrerid
+        const { rows } = await pool.query(`
+            SELECT r.id, r.referrerid as "referrerId", r.referreduserid as "referredUserId", r.referralcode as "referralCode", 
+                   r.status, r.rewardamount as "rewardAmount", r.createdat as "createdAt",
+                   u.fullname as "refereeName", u.avatarurl as "avatarUrl"
             FROM referrals r
-            JOIN users u ON r.referredUserId = u.id
-            WHERE r.referrerId = ?
-            ORDER BY r.createdAt DESC
-            LIMIT ? OFFSET ?
+            JOIN users u ON r.referreduserid = u.id
+            WHERE r.referrerid = $1
+            ORDER BY r.createdat DESC
+            LIMIT $2 OFFSET $3
         `, [userId, limit, offset]);
 
-        const [total] = await pool.query('SELECT COUNT(*) as count FROM referrals WHERE referrerId = ?', [userId]);
+        const { rows: total } = await pool.query('SELECT COUNT(*) as count FROM referrals WHERE referrerid = $1', [userId]);
 
         res.json({
             success: true,
@@ -89,8 +97,8 @@ const getReferralHistory = async (req, res) => {
             pagination: {
                 page,
                 limit,
-                total: total[0].count,
-                pages: Math.ceil(total[0].count / limit)
+                total: parseInt(total[0].count),
+                pages: Math.ceil(parseInt(total[0].count) / limit)
             }
         });
     } catch (error) {
@@ -105,7 +113,7 @@ const getReferralHistory = async (req, res) => {
 const validateReferralCode = async (req, res) => {
     try {
         const { code } = req.params;
-        const [users] = await pool.query('SELECT id, fullName FROM users WHERE referralCode = ?', [code]);
+        const { rows: users } = await pool.query('SELECT id, fullname as "fullName" FROM users WHERE referralcode = $1', [code]);
 
         if (users.length > 0) {
             res.json({
@@ -125,7 +133,6 @@ const validateReferralCode = async (req, res) => {
     }
 };
 
-// Mappings between Frontend keys and DB keys
 const SETTINGS_MAP = {
     referrerRewardAmount: 'referral_referrer_reward_amount',
     refereeRewardAmount: 'referral_referee_reward_amount',
@@ -155,8 +162,8 @@ const SETTINGS_MAP = {
 // @access  Private (Admin)
 const getReferralSettings = async (req, res) => {
     try {
-        const [rows] = await pool.query('SELECT * FROM settings WHERE setting_key LIKE "referral_%"');
-        console.log(`[DEBUG] Fetched ${rows.length} settings from DB`);
+        // Postgres LIKE 'pattern'
+        const { rows } = await pool.query('SELECT * FROM settings WHERE setting_key LIKE \'referral_%\'');
 
         const dbSettings = {};
         rows.forEach(row => {
@@ -165,15 +172,12 @@ const getReferralSettings = async (req, res) => {
 
         const responseData = {};
 
-        // Map DB keys back to frontend keys with type conversion
         for (const [feKey, dbKey] of Object.entries(SETTINGS_MAP)) {
             const value = dbSettings[dbKey];
 
-            // Handle booleans
             if (['isActive', 'requireEmailVerification', 'requireFirstPayment', 'enableIpTracking', 'enableDeviceFingerprinting', 'allowTrialCompletionReward'].includes(feKey)) {
                 responseData[feKey] = value === 'true';
             }
-            // Handle numbers
             else if (['currency'].includes(feKey)) {
                 responseData[feKey] = value || 'INR';
             }
@@ -182,7 +186,6 @@ const getReferralSettings = async (req, res) => {
             }
         }
 
-        console.log('[DEBUG] Sending settings to frontend:', responseData);
         res.json({ success: true, data: responseData });
     } catch (error) {
         console.error(error);
@@ -196,21 +199,18 @@ const getReferralSettings = async (req, res) => {
 const updateReferralSettings = async (req, res) => {
     try {
         const updates = req.body;
-        console.log('[DEBUG] Received settings update:', updates);
-
-        // Validation: Ensure basic rewards are set
-        if (!updates.referrerRewardAmount && updates.referrerRewardAmount !== 0) {
-            console.warn('[DEBUG] Missing referrerRewardAmount in payload');
-        }
-
         const queries = [];
 
         for (const [feKey, dbKey] of Object.entries(SETTINGS_MAP)) {
             if (updates[feKey] !== undefined) {
-                const value = String(updates[feKey]); // Store everything as string
-                console.log(`[DEBUG] Saving ${feKey} -> ${dbKey}: ${value}`);
+                const value = String(updates[feKey]);
+                // Postgres UPSERT: ON CONFLICT ... DO UPDATE
                 queries.push(
-                    pool.query('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?', [dbKey, value, value])
+                    pool.query(
+                        `INSERT INTO settings (setting_key, setting_value) VALUES ($1, $2) 
+                         ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`,
+                        [dbKey, value]
+                    )
                 );
             }
         }
@@ -220,7 +220,6 @@ const updateReferralSettings = async (req, res) => {
         }
 
         await Promise.all(queries);
-        console.log('[DEBUG] Settings saved successfully');
 
         res.json({ success: true, message: 'Settings updated successfully' });
     } catch (error) {
