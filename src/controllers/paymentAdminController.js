@@ -48,6 +48,11 @@ const approveWithdrawal = async (req, res) => {
     try {
         await connection.beginTransaction();
         const transactionId = req.params.id;
+        const { bankTransferReference } = req.body;
+
+        if (!bankTransferReference) {
+            return res.status(400).json({ message: 'Bank transfer reference is required for manual approval' });
+        }
 
         // 1. Get the transaction and user details
         const [transactions] = await connection.query(`
@@ -58,74 +63,44 @@ const approveWithdrawal = async (req, res) => {
         `, [transactionId]);
 
         if (transactions.length === 0) {
-            await connection.release();
             return res.status(404).json({ message: 'Pending withdrawal not found' });
         }
 
         const transaction = transactions[0];
-        const bankDetails = typeof transaction.metadata === 'string' ? JSON.parse(transaction.metadata) : transaction.metadata;
 
-        if (!bankDetails || !bankDetails.accountNumber || !bankDetails.ifsc) {
-            throw new Error('Invalid bank details for automated payout');
-        }
-
-        console.log(`🚀 [Payout] Starting automated payout for transaction ${transactionId}...`);
-
-        // 2. RazorpayX Automated Payout Flow
-        // 2.1 Create Contact
-        const contactId = await razorpayService.createContact({
-            id: transaction.userId,
-            fullName: transaction.fullName,
-            email: transaction.email,
-            phoneNumber: transaction.phoneNumber
-        });
-
-        // 2.2 Create Fund Account
-        const fundAccountId = await razorpayService.createFundAccount(contactId, bankDetails);
-
-        // 2.3 Create Payout
-        const payout = await razorpayService.createPayout(transaction.amount, fundAccountId, transactionId);
-
-        console.log(`✅ [Payout] Payout initiated successfully. Payout ID: ${payout.id}`);
-
-        // 3. Deduct from user balance (Merging Complete logic here)
+        // 2. Deduct from user balance
         const [updateResult] = await connection.query(
             'UPDATE users SET walletBalance = walletBalance - ? WHERE id = ? AND walletBalance >= ?',
             [transaction.amount, transaction.userId, transaction.amount]
         );
 
         if (updateResult.affectedRows === 0) {
-            throw new Error('Insufficient user balance or user not found during payout finalization');
+            throw new Error('Insufficient user balance or user not found');
         }
 
-        // 4. Update transaction status to "completed"
+        // 3. Update transaction status to "completed" and store reference
+        const meta = typeof transaction.metadata === 'string' ? JSON.parse(transaction.metadata) : (transaction.metadata || {});
         const updatedMetadata = {
-            ...bankDetails,
-            razorpayContactId: contactId,
-            razorpayFundAccountId: fundAccountId,
-            razorpayPayoutId: payout.id,
-            payoutStatus: payout.status,
-            completedAt: new Date().toISOString()
+            ...meta,
+            bankTransferReference,
+            completedAt: new Date().toISOString(),
+            payoutMode: 'manual'
         };
 
         await connection.query(
             'UPDATE transactions SET status = "completed", description = ?, metadata = ? WHERE id = ?',
-            [`Withdrawal Completed via RazorpayX (ID: ${payout.id})`, JSON.stringify(updatedMetadata), transactionId]
+            [`Withdrawal Manually Approved - Ref: ${bankTransferReference}`, JSON.stringify(updatedMetadata), transactionId]
         );
 
         await connection.commit();
         res.json({
             success: true,
-            message: 'Withdrawal processed and paid automatically',
-            payoutId: payout.id
+            message: 'Withdrawal manually approved successfully'
         });
     } catch (error) {
         if (connection) await connection.rollback();
-        console.error('❌ Approve Withdrawal (Automatic) Error:', error);
-        res.status(500).json({
-            message: 'Failed to initiate automatic payout: ' + error.message,
-            detail: error.message
-        });
+        console.error('❌ Manual Approval Error:', error);
+        res.status(500).json({ message: 'Failed to approve withdrawal manually: ' + error.message });
     } finally {
         if (connection) connection.release();
     }
@@ -211,7 +186,7 @@ const completeWithdrawal = async (req, res) => {
 const getAllTransactions = async (req, res) => {
     try {
         const [rows] = await pool.query(`
-            SELECT t.*, u.fullName as userName, u.email 
+            SELECT t.*, u.fullName as userName, u.email, u.phoneNumber 
             FROM transactions t
             JOIN users u ON t.userId = u.id
             ORDER BY t.createdAt DESC
@@ -231,7 +206,7 @@ const getAllTransactions = async (req, res) => {
 const getPendingRefunds = async (req, res) => {
     try {
         const [rows] = await pool.query(`
-            SELECT t.*, u.fullName as userName, u.email 
+            SELECT t.*, u.fullName as userName, u.email, u.phoneNumber 
             FROM transactions t
             JOIN users u ON t.userId = u.id
             WHERE t.type = 'refund' AND t.status = 'pending'
@@ -282,6 +257,67 @@ const adjustWalletBalance = async (req, res) => {
     }
 };
 
+const getUserForAdjustment = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const query = `
+            SELECT 
+                u.id, 
+                u.fullName, 
+                u.email, 
+                u.phoneNumber, 
+                u.role, 
+                u.isApproved, 
+                u.createdAt,
+                u.walletBalance,
+                s.status as subscriptionStatus,
+                p.name as planName
+            FROM users u
+            LEFT JOIN (
+                SELECT userId, status, planId
+                FROM (
+                    SELECT userId, status, planId, ROW_NUMBER() OVER (PARTITION BY userId ORDER BY createdAt DESC) as rn
+                    FROM subscriptions
+                ) t
+                WHERE rn = 1
+            ) s ON u.id = s.userId
+            LEFT JOIN plans p ON s.planId = p.id
+            WHERE u.id = ?
+        `;
+        const [users] = await pool.query(query, [userId]);
+
+        if (users.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json({
+            success: true,
+            data: users[0]
+        });
+    } catch (error) {
+        console.error('getUserForAdjustment error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const getUserTransactions = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const [rows] = await pool.query(
+            'SELECT * FROM transactions WHERE userId = ? ORDER BY createdAt DESC LIMIT 50',
+            [userId]
+        );
+
+        res.json({
+            success: true,
+            data: rows
+        });
+    } catch (error) {
+        console.error('getUserTransactions error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     getPendingWithdrawals,
     approveWithdrawal,
@@ -289,5 +325,7 @@ module.exports = {
     completeWithdrawal,
     getPendingRefunds,
     getAllTransactions,
-    adjustWalletBalance
+    adjustWalletBalance,
+    getUserForAdjustment,
+    getUserTransactions
 };

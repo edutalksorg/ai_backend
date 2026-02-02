@@ -69,7 +69,9 @@ const {
     completeWithdrawal,
     getPendingRefunds,
     getAllTransactions: getAllTransactionsAdmin,
-    adjustWalletBalance
+    adjustWalletBalance,
+    getUserForAdjustment,
+    getUserTransactions
 } = require('../controllers/paymentAdminController');
 const pronunciationRoutes = require('./pronunciationRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
@@ -155,6 +157,8 @@ router.post('/admin/payments/withdrawals/:id/complete', protect, authorize('Admi
 router.get('/admin/payments/refunds/pending', protect, authorize('Admin', 'SuperAdmin'), getPendingRefunds);
 router.get('/admin/payments/transactions', protect, authorize('Admin', 'SuperAdmin'), getAllTransactionsAdmin);
 router.post('/admin/payments/wallets/adjust-balance', protect, authorize('Admin', 'SuperAdmin'), adjustWalletBalance);
+router.get('/admin/payments/wallets/user/:id', protect, authorize('Admin', 'SuperAdmin'), getUserForAdjustment);
+router.get('/admin/payments/wallets/user/:id/transactions', protect, authorize('Admin', 'SuperAdmin'), getUserTransactions);
 
 // Coupon routes
 // Coupon routes
