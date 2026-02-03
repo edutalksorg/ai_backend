@@ -9,7 +9,7 @@ const updateAvailability = async (req, res) => {
         const { status } = req.body;
         const userId = req.user.id;
         // Postgres: lastActiveAt -> 'lastactiveat'
-        await pool.query('UPDATE users SET status = $1, lastActiveAt = NOW() WHERE id = $2', [status, userId]);
+        await pool.query('UPDATE users SET status = $1, lastactiveat = NOW() WHERE id = $2', [status, userId]);
         res.json({ success: true, message: 'Status updated' });
     } catch (error) {
         console.error(error);
@@ -22,39 +22,47 @@ const isUserCallEligible = async (user) => {
         return true;
     }
 
-    // 1. Check for active subscription
-    // Columns: s.planId -> s.planid
+    // 1. Check for ANY active subscription (Paid or Free Trial)
+    // We strictly require an active token/subscription for calls now.
+    // "Free usage is 24 hours from their joining time" -> This is handled by the subscription endDate.
     const { rows: subs } = await pool.query(`
         SELECT s.*, p.name as "planName" 
         FROM subscriptions s 
-        JOIN plans p ON s.planId = p.id 
-        WHERE s.userId = $1 AND s.status = 'active' AND s.endDate > NOW()
+        JOIN plans p ON s.planid = p.id 
+        WHERE s.userid = $1 AND s.status = 'active' AND s.enddate > NOW()
     `, [user.id]);
 
-    if (subs.length > 0) {
-        // planName aliased correctly
-        const planName = subs[0].planName.toLowerCase();
-        if (planName.includes('monthly') || planName.includes('quarterly') || planName.includes('yearly')) {
-            return true;
-        }
+    if (subs.length === 0) {
+        // No active subscription (expired trial or cancelled).
+        // Access revoked.
+        return false;
     }
 
-    // 2. Free Users
-    // call_history columns default lowercase: durationseconds, startedat
+    const subscription = subs[0];
+    const planName = subscription.planName.toLowerCase();
+
+    // 2. Paid Plans = Unlimited
+    if (planName.includes('monthly') || planName.includes('quarterly') || planName.includes('yearly')) {
+        return true;
+    }
+
+    // 3. Free Trial = 5 Minute Limit (Daily)
+    // Calculate usage for TODAY only
     const { rows: calls } = await pool.query(`
-        SELECT id, durationSeconds as "durationSeconds", status, startedAt as "startedAt"
+        SELECT durationseconds as "durationSeconds"
         FROM call_history 
-        WHERE (callerId = $1 OR calleeId = $1) 
+        WHERE (callerid = $1 OR calleeid = $1) 
           AND status = 'completed'
+          AND startedat >= CURRENT_DATE
     `, [user.id]);
 
     let totalSeconds = 0;
     for (const call of calls) {
-        const duration = call.durationSeconds || 0;
-        totalSeconds += duration;
+        totalSeconds += (call.durationSeconds || 0);
     }
-    const limitSeconds = 300;
-    return totalSeconds < limitSeconds;
+
+    // 5 minutes = 300 seconds
+    return totalSeconds < 300;
 };
 
 // @desc    Get available users
@@ -67,12 +75,12 @@ const getAvailableUsers = async (req, res) => {
 
         // Fix casing for Postgres
         const { rows: candidates } = await pool.query(`
-            SELECT u.id, u.fullName as "fullName", u.avatarUrl as "avatarUrl", u.status, u.role, u.lastActiveAt as "lastActiveAt",
-                   s.status as "subStatus", s.endDate as "subEndDate",
+            SELECT u.id, u.fullname as "fullName", u.avatarurl as "avatarUrl", u.status, u.role, u.lastactiveat as "lastActiveAt",
+                   s.status as "subStatus", s.enddate as "subEndDate",
                    p.name as "planName"
             FROM users u
-            LEFT JOIN subscriptions s ON u.id = s.userId AND s.status = 'active'
-            LEFT JOIN plans p ON s.planId = p.id
+            LEFT JOIN subscriptions s ON u.id = s.userid AND s.status = 'active'
+            LEFT JOIN plans p ON s.planid = p.id
             WHERE u.status = 'Online' 
               AND LOWER(u.role) NOT IN ('admin', 'superadmin', 'instructor')
               AND u.id != $1
@@ -119,7 +127,7 @@ const initiateCall = async (req, res) => {
         const caller = callerUsers[0];
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerId, calleeId, status, topicId, startedAt) VALUES ($1, $2, $3, $4, NULL) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status, topicid, startedat) VALUES ($1, $2, $3, $4, NULL) RETURNING id',
             [callerId, calleeId, 'initiated', topicId || null]
         );
 
@@ -165,12 +173,12 @@ const initiateRandomCall = async (req, res) => {
                    s.status as "subStatus", s.endDate as "subEndDate",
                    p.name as "planName"
             FROM users u
-            LEFT JOIN subscriptions s ON u.id = s.userId AND s.status = 'active'
-            LEFT JOIN plans p ON s.planId = p.id
+            LEFT JOIN subscriptions s ON u.id = s.userid AND s.status = 'active'
+            LEFT JOIN plans p ON s.planid = p.id
             WHERE u.status = 'Online' 
               AND LOWER(u.role) NOT IN ('admin', 'superadmin', 'instructor')
               AND u.id != $1
-              AND u.lastActiveAt > NOW() - INTERVAL '5 minutes' 
+              AND u.lastactiveat > NOW() - INTERVAL '5 minutes' 
             ORDER BY RANDOM()
         `, [callerId]); // Fixed DATE_SUB -> INTERVAL syntax for PG. Fixed RAND() -> RANDOM().
 
@@ -187,7 +195,7 @@ const initiateRandomCall = async (req, res) => {
         }
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerId, calleeId, status, startedAt) VALUES ($1, $2, $3, NULL) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status, startedat) VALUES ($1, $2, $3, NULL) RETURNING id',
             [callerId, callee.id, 'initiated']
         );
 
@@ -226,13 +234,13 @@ const respondToCall = async (req, res) => {
         const accept = req.body === true || req.body.accept === true;
         const userId = req.user.id;
 
-        const { rows: calls } = await pool.query('SELECT * FROM call_history WHERE id = $1 AND calleeId = $2', [id, userId]);
+        const { rows: calls } = await pool.query('SELECT * FROM call_history WHERE id = $1 AND calleeid = $2', [id, userId]);
         if (calls.length === 0) return res.status(404).json({ message: 'Call not found' });
 
         const call = calls[0]; // lowercase props: callerid
         const status = accept ? 'accepted' : 'rejected';
 
-        await pool.query('UPDATE call_history SET status = $1, startedAt = $2 WHERE id = $3', [status, accept ? new Date() : null, id]);
+        await pool.query('UPDATE call_history SET status = $1, startedat = $2 WHERE id = $3', [status, accept ? new Date() : null, id]);
 
         // Notify Caller
         // call.callerId -> call.callerid
@@ -258,7 +266,7 @@ const endCall = async (req, res) => {
         const reason = typeof req.body === 'string' ? req.body : (req.body.reason || 'Ended by user');
         const userId = req.user.id;
 
-        const { rows: calls } = await pool.query('SELECT * FROM call_history WHERE id = $1 AND (callerId = $2 OR calleeId = $2)', [id, userId]);
+        const { rows: calls } = await pool.query('SELECT * FROM call_history WHERE id = $1 AND (callerid = $2 OR calleeid = $2)', [id, userId]);
         if (calls.length === 0) return res.status(404).json({ message: 'Call not found' });
 
         const call = calls[0];
@@ -267,7 +275,7 @@ const endCall = async (req, res) => {
         const endTime = new Date();
         const durationSeconds = call.startedat ? Math.floor((endTime - new Date(call.startedat)) / 1000) : 0;
 
-        await pool.query('UPDATE call_history SET status = \'completed\', endedAt = $1, durationSeconds = $2 WHERE id = $3', [endTime, durationSeconds, id]);
+        await pool.query('UPDATE call_history SET status = \'completed\', endedat = $1, durationseconds = $2 WHERE id = $3', [endTime, durationSeconds, id]);
 
         sendToUser(otherUserId, 'CallEnded', { callId: id, reason });
         res.json({ success: true, message: 'Call ended' });
@@ -326,7 +334,7 @@ const rateCall = async (req, res) => {
         }
 
         const { rows: calls } = await pool.query(
-            'SELECT * FROM call_history WHERE id = $1 AND (callerId = $2 OR calleeId = $2)',
+            'SELECT * FROM call_history WHERE id = $1 AND (callerid = $2 OR calleeid = $2)',
             [id, userId]
         );
 

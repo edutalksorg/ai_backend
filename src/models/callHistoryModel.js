@@ -12,11 +12,20 @@ const createCallHistoryTable = async () => {
       startedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       endedAt TIMESTAMP,
       rating INT DEFAULT NULL,
+      topicId INT DEFAULT NULL,
       FOREIGN KEY (callerId) REFERENCES users(id),
-      FOREIGN KEY (calleeId) REFERENCES users(id)
+      FOREIGN KEY (calleeId) REFERENCES users(id),
+      FOREIGN KEY (topicId) REFERENCES topics(id)
     )
   `;
   await pool.query(query);
+
+  // Migration: Add topicId if it doesn't exist
+  try {
+    await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS topicId INT REFERENCES topics(id)');
+  } catch (e) {
+    console.error('Migration failed for call_history topicId:', e.message);
+  }
 };
 
 module.exports = createCallHistoryTable;

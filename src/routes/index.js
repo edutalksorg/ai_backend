@@ -73,6 +73,12 @@ const {
     getUserForAdjustment,
     getUserTransactions
 } = require('../controllers/paymentAdminController');
+const {
+    sendRequest,
+    acceptRequest,
+    rejectRequest,
+    getConnections
+} = require('../controllers/userConnectionController');
 const pronunciationRoutes = require('./pronunciationRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
 const permissionRoutes = require('./permissionRoutes');
@@ -106,6 +112,12 @@ router.post('/calls/:id/end', protect, endCall);
 router.get('/calls/history', protect, getCallHistory);
 router.get('/calls/agora-token', protect, getAgoraToken); // Main route for Agora token
 router.post('/calls/:id/rate', protect, rateCall); // Rate a completed call
+
+// Connection routes (Friend Management)
+router.get('/connections', protect, getConnections);
+router.post('/connections/request', protect, sendRequest);
+router.post('/connections/accept/:id', protect, acceptRequest);
+router.post('/connections/reject/:id', protect, rejectRequest);
 
 // Referral routes
 router.get('/referrals/stats', protect, getReferralStats);

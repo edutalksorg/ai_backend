@@ -112,6 +112,31 @@ const verifyRazorpayPayment = async (req, res) => {
                 'UPDATE subscriptions SET status = \'active\', paymentStatus = \'completed\' WHERE id = $1',
                 [sub.id]
             );
+
+            // Notify Friends of Status Change (Real-time update)
+            try {
+                const { rows: friends } = await pool.query(`
+                    SELECT requester_id, recipient_id 
+                    FROM user_connections 
+                    WHERE (requester_id = $1 OR recipient_id = $1) AND status = 'accepted'
+                `, [userId]);
+
+                console.log(`[Payment] 📢 Notifying ${friends.length} friends of eligibility update for user ${userId}`);
+
+                const { sendToUser } = require('../services/socketService');
+
+                friends.forEach(friend => {
+                    const friendId = friend.requester_id === userId ? friend.recipient_id : friend.requester_id;
+                    sendToUser(friendId, 'UserEligibilityChanged', {
+                        userId: userId,
+                        isCallEligible: true, // Subscription active = eligible
+                        onlineStatus: 'Online' // Assuming online if paying
+                    });
+                });
+            } catch (notifyError) {
+                console.error('⚠️ [Payment] Failed to notify friends:', notifyError);
+            }
+
         } else {
             console.warn('⚠️ [Payment] No pending subscription found to activate.');
         }

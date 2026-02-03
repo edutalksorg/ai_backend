@@ -19,6 +19,7 @@ const createReferralTable = require('../models/referralModel');
 const createUserProgressTable = require('../models/userProgressModel');
 const createPronunciationTable = require('../models/pronunciationModel');
 const createQuizAttemptTable = require('../models/quizAttemptModel');
+const createUserConnectionTable = require('../models/userConnectionModel');
 
 // Preserving settings table for Referral Settings
 const createSettingsTable = async () => {
@@ -56,6 +57,7 @@ const initDb = async () => {
     await createPronunciationTable();
     await createQuizAttemptTable();
     await createSettingsTable();
+    await createUserConnectionTable();
 
     console.log('✅ All tables initialized.');
 
@@ -85,7 +87,7 @@ const initDb = async () => {
         ['Free Trial', '24-hour full access trial', 0, 'Free', 1, 0, false],
         ['Monthly', 'Full monthly access', 0, 'Monthly', 0, 1, false],
         ['Quarterly', 'Full quarterly access', 0, 'Quarterly', 0, 2, false],
-        ['Yearly', 'Full yearly access', 0, 'Yearly', 0, 3, true]
+        ['Yearly', 'Full yearly access', 499, 'Yearly', 0, 3, true]
       ];
 
       for (const [name, desc, price, cycle, trial, order, popular] of defaultPlans) {

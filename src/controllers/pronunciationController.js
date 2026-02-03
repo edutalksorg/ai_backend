@@ -30,10 +30,11 @@ const getParagraphs = async (req, res) => {
         }
 
         const offset = (pageNumber - 1) * pageSize;
-        query += ` ORDER BY createdat DESC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+        query += ` ORDER BY createdat ASC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
         params.push(parseInt(pageSize), parseInt(offset));
 
         const { rows: paragraphs } = await pool.query(query, params);
+        console.log(`[DEBUG] getParagraphs found ${paragraphs.length} items:`, paragraphs.map(p => ({ id: p.id, title: p.title, published: p.isPublished })));
         res.json({ success: true, data: paragraphs });
     } catch (error) {
         console.error(error);
@@ -214,14 +215,87 @@ const convertParagraphToSpeech = async (req, res) => {
     }
 };
 
+// Helper: Levenshtein Distance for words
+const levenshteinDistance = (arr1, arr2) => {
+    const matrix = [];
+    for (let i = 0; i <= arr1.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= arr2.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= arr1.length; i++) {
+        for (let j = 1; j <= arr2.length; j++) {
+            if (arr1[i - 1] === arr2[j - 1]) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1, // substitution
+                    matrix[i][j - 1] + 1,     // insertion
+                    matrix[i - 1][j] + 1      // deletion
+                );
+            }
+        }
+    }
+    return matrix[arr1.length][arr2.length];
+};
+
+const calculateAccuracy = (original, transcript) => {
+    if (!original || !transcript) return 0;
+
+    // Normalize: lowercase, remove punctuation, split by space
+    const clean = (str) => str.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").replace(/\s{2,}/g, " ").trim().split(" ");
+
+    const originalWords = clean(original);
+    const transcriptWords = clean(transcript);
+
+    if (originalWords.length === 0) return 0;
+
+    const distance = levenshteinDistance(originalWords, transcriptWords);
+    const maxLength = Math.max(originalWords.length, transcriptWords.length);
+
+    // Accuracy = (1 - distance / max length) * 100
+    const accuracy = Math.max(0, (1 - distance / maxLength) * 100);
+    return accuracy;
+};
+
 // @desc    Assess pronunciation
 // @route   POST /api/v1/pronunciation/assess
 // @access  Private
 const assessPronunciation = async (req, res) => {
     try {
         console.log('🎤 Received assessment request');
-        const accuracy = 70 + Math.random() * 30;
-        const fluency = 60 + Math.random() * 40;
+        // Handle both JSON (transcript) and FormData (if we were parsing it, which we aren't, but let's be safe)
+        // Since we switched to JSON in frontend, req.body should have values.
+        // Capital P or small p handling
+        const paragraphId = req.body.paragraphId || req.body.ParagraphId;
+        const transcript = req.body.transcript || req.body.Transcript || "";
+
+        console.log('Assessment Params:', { paragraphId, transcriptPreview: transcript.substring(0, 50) });
+
+        if (!paragraphId) {
+            return res.status(400).json({ message: 'Paragraph ID is required' });
+        }
+
+        // Fetch original text
+        const { rows } = await pool.query('SELECT content FROM pronunciation_paragraphs WHERE id = $1', [paragraphId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Paragraph not found' });
+        }
+
+        const originalText = rows[0].content;
+
+        // Calculate Score
+        // If no transcript provided (e.g. microphone error or silent), score is 0
+        let accuracy = 0;
+        let fluency = 0;
+
+        if (transcript && transcript.length > 0) {
+            accuracy = calculateAccuracy(originalText, transcript);
+            // Fluency is harder to estimate from text alone, but we can approximate it 
+            // by assuming high accuracy correlates with high fluency, with some random variation or length penalty
+            // For now, let's make fluency correlated with accuracy but slightly higher to be encouraging
+            fluency = Math.min(100, accuracy + 5 + Math.random() * 10);
+        }
+
         const overall = (accuracy + fluency) / 2;
 
         res.json({
@@ -231,8 +305,10 @@ const assessPronunciation = async (req, res) => {
                 fluency: Math.round(fluency),
                 overall: Math.round(overall)
             },
-            feedback: "Good effort! Your pronunciation is clear with some minor pauses.",
-            mistakes: [],
+            feedback: accuracy > 80 ? "Excellent pronunciation! Very clear." :
+                accuracy > 60 ? "Good effort. Try to articulate words more clearly." :
+                    "Keep practicing. Listen to the reference audio and try again.",
+            mistakes: [], // We could implement diffing later to populate this
             processing: { status: 'Completed', isCompleted: true }
         });
     } catch (error) {
