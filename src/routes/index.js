@@ -41,7 +41,7 @@ const {
     getUserPermissions,
     updateUserPermission
 } = require('../controllers/superAdminController');
-const { verifyRazorpayPayment } = require('../controllers/paymentController');
+const { verifyRazorpayPayment, getPaymentStatus } = require('../controllers/paymentController');
 const { getAgoraToken } = require('../controllers/agoraController');
 const { getWallet, getTransactions, withdraw } = require('../controllers/walletController');
 const {
@@ -175,6 +175,7 @@ router.post('/superadmin/users/:id/permissions', protect, authorize('SuperAdmin'
 
 // Payment routes
 router.post('/payments/verify', protect, verifyRazorpayPayment);
+router.get('/payments/:orderId/status', protect, getPaymentStatus);
 
 // Agora routes
 router.get('/agora/token', protect, getAgoraToken);

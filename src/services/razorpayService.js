@@ -29,6 +29,25 @@ const createOrder = async (amount, receiptId) => {
 };
 
 /**
+ * Fetch a Razorpay Order
+ * @param {string} orderId - Razorpay Order ID
+ * @returns {Promise<Object>} Order Details
+ */
+const fetchOrder = async (orderId) => {
+    try {
+        const order = await razorpay.orders.fetch(orderId);
+        return order;
+    } catch (error) {
+        console.error('❌ [Razorpay] Fetch Order Error:', error);
+        // Propagate the error with status code if available
+        if (error.statusCode) {
+            throw error;
+        }
+        throw new Error('Failed to fetch Razorpay order');
+    }
+};
+
+/**
  * Verify Razorpay Payment Signature
  * @param {string} orderId - Razorpay Order ID
  * @param {string} paymentId - Razorpay Payment ID
@@ -36,17 +55,47 @@ const createOrder = async (amount, receiptId) => {
  * @returns {boolean} isValid
  */
 const verifyPaymentSignature = (orderId, paymentId, signature) => {
-    const body = orderId + "|" + paymentId;
-    const expectedSignature = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-        .update(body.toString())
-        .digest('hex');
+    try {
+        // Validate inputs
+        if (!orderId || !paymentId || !signature) {
+            console.error('❌ [Razorpay] Missing required parameters for signature verification', {
+                hasOrderId: !!orderId,
+                hasPaymentId: !!paymentId,
+                hasSignature: !!signature
+            });
+            return false;
+        }
 
-    const isValid = expectedSignature === signature;
-    if (!isValid) {
-        console.error('❌ [Razorpay] Invalid Signature');
+        // Validate environment variable
+        if (!process.env.RAZORPAY_KEY_SECRET) {
+            console.error('❌ [Razorpay] RAZORPAY_KEY_SECRET is not configured');
+            throw new Error('Razorpay configuration error: KEY_SECRET missing');
+        }
+
+        const body = orderId + "|" + paymentId;
+        const expectedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .update(body.toString())
+            .digest('hex');
+
+        const isValid = expectedSignature === signature;
+
+        if (!isValid) {
+            console.error('❌ [Razorpay] Invalid Signature', {
+                orderId,
+                paymentId,
+                receivedSignature: signature.substring(0, 10) + '...',
+                expectedSignature: expectedSignature.substring(0, 10) + '...'
+            });
+        } else {
+            console.log('✅ [Razorpay] Signature verified successfully');
+        }
+
+        return isValid;
+    } catch (error) {
+        console.error('❌ [Razorpay] Signature verification error:', error.message);
+        throw error; // Re-throw to be caught by controller
     }
-    return isValid;
 };
 
 /**
@@ -125,6 +174,7 @@ const createPayout = async (amount, fundAccountId, referenceId) => {
 
 module.exports = {
     createOrder,
+    fetchOrder,
     verifyPaymentSignature,
     createContact,
     createFundAccount,
