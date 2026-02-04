@@ -17,6 +17,8 @@ const createTopicTable = async () => {
       status VARCHAR(50) DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
       isFeatured BOOLEAN DEFAULT FALSE,
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      grammarData JSONB,
       FOREIGN KEY (instructorId) REFERENCES users(id)
     )
   `;

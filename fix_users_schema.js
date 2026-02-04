@@ -7,7 +7,9 @@ const fixUsersSchema = async () => {
             'ALTER TABLE users ADD COLUMN IF NOT EXISTS registrationMethod VARCHAR(50) DEFAULT \'organic\'',
             'ALTER TABLE users ADD COLUMN IF NOT EXISTS registrationCode VARCHAR(50)',
             'ALTER TABLE users ADD COLUMN IF NOT EXISTS usedCouponCode VARCHAR(50)',
-            'ALTER TABLE users ADD COLUMN IF NOT EXISTS referrerName VARCHAR(255)'
+            'ALTER TABLE users ADD COLUMN IF NOT EXISTS referrerName VARCHAR(255)',
+            'ALTER TABLE topics ADD COLUMN IF NOT EXISTS grammarData JSONB',
+            'ALTER TABLE topics ADD COLUMN IF NOT EXISTS updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
         ];
 
         for (const query of queries) {
