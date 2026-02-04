@@ -2,7 +2,8 @@ name: Deploy Backend to EC2
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   deploy:
@@ -12,15 +13,30 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Upload only source code (NO node_modules, NO .git, NO junk)
       - name: Upload Backend to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
-          source: "."
+          source: "./"
           target: "/home/ubuntu/ai_backend"
+          rm: true
+          overwrite: true
+          debug: true
+          excludes: |
+            .git
+            .github
+            node_modules
+            logs
+            .env
+            dist
+            build
+            coverage
+            *.log
 
+      # Install dependencies & restart cleanly
       - name: Install & Restart Backend
         uses: appleboy/ssh-action@v1
         with:
@@ -29,6 +45,16 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             cd /home/ubuntu/ai_backend
-            npm install --production
-            pm2 restart ai-backend || pm2 start src/app.js --name ai-backend
+
+            echo "Cleaning old dependencies..."
+            rm -rf node_modules package-lock.json
+
+            echo "Installing dependencies..."
+            npm install --omit=dev
+
+            echo "Restarting backend with PM2..."
+            pm2 delete ai-backend || true
+            pm2 start src/app.js --name ai-backend
             pm2 save
+
+            echo "Deployment completed successfully"
