@@ -52,6 +52,9 @@ jobs:
             echo "Installing dependencies..."
             npm install --omit=dev
 
+            echo "Running database migrations..."
+            node fix_users_schema.js
+
             echo "Restarting backend with PM2..."
             pm2 delete ai-backend || true
             pm2 start src/app.js --name ai-backend
