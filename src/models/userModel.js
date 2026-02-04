@@ -24,7 +24,8 @@ const createUserTable = async () => {
       resetPasswordExpire TIMESTAMP,
       registrationMethod VARCHAR(50) DEFAULT 'organic',
       registrationCode VARCHAR(50),
-      usedCouponCode VARCHAR(50)
+      usedCouponCode VARCHAR(50),
+      referrerName VARCHAR(255)
     )
   `;
   await pool.query(query);
