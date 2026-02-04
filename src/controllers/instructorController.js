@@ -62,11 +62,13 @@ const getTopicById = async (req, res) => {
             imageUrl: topic.imageurl || topic.imageUrl,
             estimatedTime: topic.estimatedtime || topic.estimatedTime,
             createdAt: topic.createdat || topic.createdAt,
-            updatedAt: topic.updatedat || topic.updatedAt
+            updatedAt: topic.updatedat || topic.updatedAt,
+            grammarData: topic.grammardata || topic.grammarData
         };
 
         if (typeof mappedTopic.vocabularyList === 'string') try { mappedTopic.vocabularyList = JSON.parse(mappedTopic.vocabularyList); } catch (e) { }
         if (typeof mappedTopic.discussionPoints === 'string') try { mappedTopic.discussionPoints = JSON.parse(mappedTopic.discussionPoints); } catch (e) { }
+        if (typeof mappedTopic.grammarData === 'string') try { mappedTopic.grammarData = JSON.parse(mappedTopic.grammarData); } catch (e) { }
 
         res.json({ success: true, data: mappedTopic });
     } catch (error) {
@@ -91,13 +93,13 @@ const getCategories = async (req, res) => {
 
 const createTopic = async (req, res) => {
     try {
-        const { title, description, content, category, difficulty, estimatedTime, status, imageUrl, vocabularyList, discussionPoints } = req.body;
+        const { title, description, content, category, difficulty, estimatedTime, status, imageUrl, vocabularyList, discussionPoints, grammarData } = req.body;
         const instructorId = req.user.id;
 
         const { rows: result } = await pool.query(
-            `INSERT INTO topics (title, description, content, category, difficulty, estimatedtime, status, imageurl, vocabularylist, discussionpoints, instructorid) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-            [title, description, content || '', category || 'General', difficulty || 'Beginner', estimatedTime || 15, status || 'draft', imageUrl || null, JSON.stringify(vocabularyList || []), JSON.stringify(discussionPoints || []), instructorId]
+            `INSERT INTO topics (title, description, content, category, difficulty, estimatedtime, status, imageurl, vocabularylist, discussionpoints, instructorid, grammardata) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+            [title, description, content || '', category || 'General', difficulty || 'Beginner', estimatedTime || 15, status || 'draft', imageUrl || null, JSON.stringify(vocabularyList || []), JSON.stringify(discussionPoints || []), instructorId, JSON.stringify(grammarData || {})]
         );
 
         res.status(201).json({
@@ -112,12 +114,12 @@ const createTopic = async (req, res) => {
 
 const updateTopic = async (req, res) => {
     try {
-        const { title, description, content, category, difficulty, estimatedTime, status, imageUrl, vocabularyList, discussionPoints } = req.body;
+        const { title, description, content, category, difficulty, estimatedTime, status, imageUrl, vocabularyList, discussionPoints, grammarData } = req.body;
         const topicId = req.params.id;
 
         await pool.query(
-            `UPDATE topics SET title=$1, description=$2, content=$3, category=$4, difficulty=$5, estimatedtime=$6, status=$7, imageurl=$8, vocabularylist=$9, discussionpoints=$10 WHERE id=$11`,
-            [title, description, content, category, difficulty, estimatedTime, status, imageUrl, JSON.stringify(vocabularyList || []), JSON.stringify(discussionPoints || []), topicId]
+            `UPDATE topics SET title=$1, description=$2, content=$3, category=$4, difficulty=$5, estimatedtime=$6, status=$7, imageurl=$8, vocabularylist=$9, discussionpoints=$10, grammardata=$11 WHERE id=$12`,
+            [title, description, content, category, difficulty, estimatedTime, status, imageUrl, JSON.stringify(vocabularyList || []), JSON.stringify(discussionPoints || []), JSON.stringify(grammarData || {}), topicId]
         );
 
         res.json({ success: true, message: 'Topic updated successfully' });

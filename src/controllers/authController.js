@@ -18,6 +18,14 @@ const registerUser = async (req, res) => {
             return res.status(400).json({ message: 'User already exists' });
         }
 
+        // Check for duplicate phone number
+        if (phoneNumber) {
+            const { rows: phoneExists } = await pool.query('SELECT * FROM users WHERE phoneNumber = $1', [phoneNumber]);
+            if (phoneExists.length > 0) {
+                return res.status(400).json({ message: 'Phone number already in use' });
+            }
+        }
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 

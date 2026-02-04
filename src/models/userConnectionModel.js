@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 
 const createUserConnectionTable = async () => {
-    const query = `
+  const query = `
     CREATE TABLE IF NOT EXISTS user_connections (
       id SERIAL PRIMARY KEY,
       requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -12,13 +12,13 @@ const createUserConnectionTable = async () => {
       UNIQUE(requester_id, recipient_id)
     )
   `;
-    try {
-        await pool.query(query);
-        console.log('✅ User Connections table initialized.');
-    } catch (error) {
-        console.error('❌ Error creating User Connections table:', error);
-        throw error;
-    }
+  try {
+    await pool.query(query);
+    console.log('✅ User Connections table initialized.');
+  } catch (error) {
+    console.error('❌ Error creating User Connections table:', error);
+    throw error;
+  }
 };
 
 module.exports = createUserConnectionTable;
