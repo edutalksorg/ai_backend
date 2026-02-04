@@ -21,6 +21,10 @@ const getAllUsers = async (req, res) => {
                 u.role, 
                 u.isapproved as "isApproved", 
                 u.createdat as "createdAt",
+                u.referrername as "referrerName",
+                u.registrationmethod as "registrationMethod",
+                u.registrationcode as "registrationCode",
+                u.usedcouponcode as "usedCouponCode",
                 s.status as "subscriptionStatus",
                 p.name as "planName"
             FROM users u
@@ -532,6 +536,49 @@ const resendVerificationEmail = async (req, res) => {
     }
 };
 
+// @desc    Get users who used a specific coupon
+// @route   GET /api/v1/admin/coupons/:id/users
+// @access  Private (Admin/SuperAdmin)
+const getCouponUsageUsers = async (req, res) => {
+    try {
+        const couponId = req.params.id;
+        console.log(`🔍 [Admin] Fetching usage for coupon ID: ${couponId}`);
+
+        // Verify coupon exists
+        const { rows: coupons } = await pool.query('SELECT code FROM coupons WHERE id = $1', [couponId]);
+        if (coupons.length === 0) {
+            console.log('❌ [Admin] Coupon not found');
+            return res.status(404).json({ message: 'Coupon not found' });
+        }
+
+        const query = `
+            SELECT 
+                u.id, 
+                u.fullname as "fullName", 
+                u.email, 
+                cu.usedat as "usedAt",
+                cu.discountamount as "discountAmount",
+                cu.orderid as "orderId"
+            FROM coupon_usages cu
+            JOIN users u ON cu.userid = u.id
+            WHERE cu.couponid = $1
+            ORDER BY cu.usedat DESC
+        `;
+
+        const { rows: users } = await pool.query(query, [couponId]);
+        console.log(`✅ [Admin] Found ${users.length} users for coupon ${couponId}`);
+
+        res.json({
+            success: true,
+            data: users,
+            couponCode: coupons[0].code
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     getAllUsers,
     reviewInstructor,
@@ -544,5 +591,6 @@ module.exports = {
     deleteUser,
     updateUser,
     validateCoupon,
-    resendVerificationEmail
+    resendVerificationEmail,
+    getCouponUsageUsers
 };

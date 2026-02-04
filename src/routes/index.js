@@ -34,7 +34,8 @@ const {
     deleteUser,
     updateUser,
     validateCoupon,
-    resendVerificationEmail
+    resendVerificationEmail,
+    getCouponUsageUsers
 } = require('../controllers/adminController');
 const { submitQuiz, getQuizAttempts, getAttemptDetails } = require('../controllers/quizAttemptController');
 const {
@@ -84,6 +85,8 @@ const {
 const pronunciationRoutes = require('./pronunciationRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
 const permissionRoutes = require('./permissionRoutes');
+const carouselRoutes = require('./carouselRoutes');
+const settingsRoutes = require('./settingsRoutes');
 
 // Auth routes
 router.use('/auth', authRoutes);
@@ -91,6 +94,8 @@ router.use('/pronunciation', pronunciationRoutes);
 router.use('/subscriptions', subscriptionRoutes);
 router.use('/Subscriptions', subscriptionRoutes); // Handle frontend case inconsistency
 router.use('/permission-management', permissionRoutes);
+router.use('/carousel', carouselRoutes);
+router.use('/settings', settingsRoutes);
 
 // User routes
 router.get('/users/progress/summary', protect, getProgressSummary);
@@ -188,6 +193,8 @@ router.post('/coupons', protect, authorize('Admin', 'SuperAdmin'), createCoupon)
 router.put('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), updateCoupon);
 router.delete('/coupons/:id', protect, authorize('Admin', 'SuperAdmin'), deleteCoupon);
 router.post('/coupons/validate', protect, validateCoupon);
+router.get('/admin/coupons/:id/users', protect, authorize('Admin', 'SuperAdmin'), getCouponUsageUsers);
+
 
 // Super Admin routes (RBAC)
 router.get('/superadmin/permissions', protect, authorize('SuperAdmin'), getAllPermissions);

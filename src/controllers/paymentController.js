@@ -85,6 +85,23 @@ const verifyRazorpayPayment = async (req, res) => {
         if (pendingTx.length > 0) {
             console.log('✅ [Payment] Found pending transaction:', pendingTx[0].id);
             transactionId = pendingTx[0].id;
+            const originalOrderId = pendingTx[0].providertransactionid; // The Merchant Order ID (SUB_...)
+
+            // Increment Coupon Usage Count if a coupon was used for this order
+            if (originalOrderId) {
+                console.log('🎫 [Payment] Checking for coupon usage with Order ID:', originalOrderId);
+                try {
+                    await pool.query(
+                        `UPDATE coupons 
+                         SET currentUsageCount = currentUsageCount + 1 
+                         WHERE id = (SELECT couponId FROM coupon_usages WHERE orderId = $1 LIMIT 1)`,
+                        [originalOrderId]
+                    );
+                } catch (couponError) {
+                    console.error('❌ [Payment] Failed to update coupon usage count:', couponError);
+                }
+            }
+
             await pool.query(
                 'UPDATE transactions SET status = \'completed\', providerTransactionId = $1 WHERE id = $2',
                 [razorpay_payment_id, transactionId]

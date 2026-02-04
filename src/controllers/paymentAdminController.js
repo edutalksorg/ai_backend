@@ -187,7 +187,11 @@ const completeWithdrawal = async (req, res) => {
 const getAllTransactions = async (req, res) => {
     try {
         const { rows } = await pool.query(`
-            SELECT t.*, u.fullname as "userName", u.email, u.phonenumber as "phoneNumber" 
+            SELECT t.*, 
+                   t.createdat as "createdAt",
+                   u.fullname as "userName", 
+                   u.email, 
+                   u.phonenumber as "phoneNumber" 
             FROM transactions t
             JOIN users u ON t.userid = u.id
             ORDER BY t.createdat DESC

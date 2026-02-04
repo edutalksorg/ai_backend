@@ -21,7 +21,10 @@ const createUserTable = async () => {
       lastActiveAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       referralCode VARCHAR(50) UNIQUE,
       resetPasswordToken VARCHAR(255),
-      resetPasswordExpire TIMESTAMP
+      resetPasswordExpire TIMESTAMP,
+      registrationMethod VARCHAR(50) DEFAULT 'organic',
+      registrationCode VARCHAR(50),
+      usedCouponCode VARCHAR(50)
     )
   `;
   await pool.query(query);

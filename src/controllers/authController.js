@@ -10,7 +10,7 @@ const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/e
 const registerUser = async (req, res) => {
     console.log('📝 Registering user:', req.body.email);
     try {
-        const { fullName, email, password, role, phoneNumber, referralCode } = req.body;
+        const { fullName, email, password, role, phoneNumber, referralCode, couponCode } = req.body;
 
         const { rows: userExists } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
@@ -33,14 +33,45 @@ const registerUser = async (req, res) => {
         const normalizedRole = role ? role.charAt(0).toUpperCase() + role.slice(1).toLowerCase() : 'User';
         const isAdmin = normalizedRole === 'Admin' || normalizedRole === 'SuperAdmin';
 
-        // Insert User - Postgres returns valid types
-        // Note: isVerified etc will be checked against lowercase column names in DB if we query them back
-        // But here we insert.
-        // My userModel uses standard unquoted identifiers which are case-insensitive (stored as lowercase).
-        // So params to INSERT should map correctly to columns.
+        // Generate a new, unique referral code for the new user
+        // Do NOT use the referralCode from req.body (that's the one they used to sign up!)
+        const newReferralCode = 'REF' + crypto.randomBytes(4).toString('hex').toUpperCase();
+
+        // Determine Registration Source & Referrer
+        let registrationMethod = 'organic';
+        let registrationCode = null;
+        let usedCouponCodeValue = null;
+        let referrerNameValue = null;
+
+        if (referralCode) {
+            // Check if valid referral code
+            const { rows: referrers } = await pool.query('SELECT * FROM users WHERE referralCode = $1', [referralCode]);
+            if (referrers.length > 0) {
+                registrationMethod = 'referral';
+                registrationCode = referralCode;
+                referrerNameValue = referrers[0].fullname; // Store referrer's name
+            } else {
+                // Invalid referral code - treat as organic or throw error?
+                // Let's treat as organic but maybe warn? Or just ignore.
+                // For now, if invalid, we just don't mark it as referral.
+                console.log('Invalid referral code provided:', referralCode);
+            }
+        } else if (couponCode) {
+            // Validate Coupon
+            const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1 AND status = \'Active\' AND (expiryDate IS NULL OR expiryDate > NOW())', [couponCode]);
+            if (coupons.length > 0) {
+                registrationMethod = 'coupon';
+                registrationCode = couponCode;
+                usedCouponCodeValue = couponCode;
+            } else {
+                return res.status(400).json({ message: 'Invalid or expired coupon code' });
+            }
+        }
+
+        // Insert User
         const { rows: result } = await pool.query(
-            `INSERT INTO users (fullName, email, password, role, phoneNumber, isVerified, verificationToken, verificationTokenExpires, isApproved) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            `INSERT INTO users (fullName, email, password, role, phoneNumber, isVerified, verificationToken, verificationTokenExpires, isApproved, referralCode, registrationMethod, registrationCode, usedCouponCode, referrerName) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
             [
                 fullName,
                 email,
@@ -50,7 +81,12 @@ const registerUser = async (req, res) => {
                 isAdmin,
                 isAdmin ? null : crypto.randomBytes(32).toString('hex'),
                 isAdmin ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
-                normalizedRole === 'User' || isAdmin ? true : false // Postgres boolean
+                normalizedRole === 'User' || isAdmin ? true : false,
+                newReferralCode, // Use the NEW generated code
+                registrationMethod,
+                registrationCode,
+                usedCouponCodeValue,
+                referrerNameValue
             ]
         );
 

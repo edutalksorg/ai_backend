@@ -20,6 +20,7 @@ const createUserProgressTable = require('../models/userProgressModel');
 const createPronunciationTable = require('../models/pronunciationModel');
 const createQuizAttemptTable = require('../models/quizAttemptModel');
 const createUserConnectionTable = require('../models/userConnectionModel');
+const createCarouselTable = require('../models/carouselModel');
 
 // Preserving settings table for Referral Settings
 const createSettingsTable = async () => {
@@ -58,6 +59,7 @@ const initDb = async () => {
     await createQuizAttemptTable();
     await createSettingsTable();
     await createUserConnectionTable();
+    await createCarouselTable();
 
     console.log('✅ All tables initialized.');
 
@@ -237,7 +239,11 @@ const initDb = async () => {
       ['Topics.Create', 'Create Topics', 'TopicManagement', 'Create'],
       ['Paragraphs.Publish', 'Publish Paragraphs', 'ParagraphManagement', 'Update'],
       ['Notifications.Manage', 'Manage Notifications', 'NotificationManagement', 'Manage'],
-      ['Wallet.ViewBalance', 'View Wallet Balance', 'WalletManagement', 'View']
+      ['Wallet.ViewBalance', 'View Wallet Balance', 'WalletManagement', 'View'],
+      ['Carousel.Manage', 'Manage Carousel', 'CarouselManagement', 'Manage'],
+      ['Carousel.View', 'View Carousel', 'CarouselManagement', 'View'],
+      ['Footer.Manage', 'Manage Footer Content', 'FooterManagement', 'Manage'],
+      ['Footer.View', 'View Footer Management', 'FooterManagement', 'View']
     ];
 
     console.log(`ℹ️  Syncing ${allPermissions.length} permissions...`);
@@ -248,7 +254,7 @@ const initDb = async () => {
     for (const perm of allPermissions) {
       await pool.query(
         `INSERT INTO permissions (name, displayName, module, action) VALUES ($1, $2, $3, $4) 
-             ON CONFLICT (name) DO NOTHING`,
+             ON CONFLICT (name) DO UPDATE SET displayName = $2, module = $3, action = $4`,
         perm
       );
     }
