@@ -3,6 +3,7 @@ const router = express.Router();
 
 const authRoutes = require('./authRoutes');
 const { protect, authorize } = require('../middlewares/auth');
+const upload = require('../middlewares/uploadMiddleware'); // Import upload middleware
 const { checkContentAccess } = require('../middlewares/accessControl');
 const { getProgressSummary, updateProfile, getUserProfile } = require('../controllers/userController');
 const {
@@ -60,7 +61,8 @@ const {
     respondToCall,
     endCall,
     getCallHistory,
-    rateCall
+    rateCall,
+    uploadRecording // Import uploadRecording
 } = require('../controllers/callController');
 const {
     getPendingWithdrawals,
@@ -112,6 +114,7 @@ router.post('/calls/:id/end', protect, endCall);
 router.get('/calls/history', protect, getCallHistory);
 router.get('/calls/agora-token', protect, getAgoraToken); // Main route for Agora token
 router.post('/calls/:id/rate', protect, rateCall); // Rate a completed call
+router.post('/calls/:id/recording', protect, upload.single('file'), uploadRecording); // Upload recording
 
 // Connection routes (Friend Management)
 router.get('/connections', protect, getConnections);
@@ -171,6 +174,12 @@ router.get('/admin/payments/transactions', protect, authorize('Admin', 'SuperAdm
 router.post('/admin/payments/wallets/adjust-balance', protect, authorize('Admin', 'SuperAdmin'), adjustWalletBalance);
 router.get('/admin/payments/wallets/user/:id', protect, authorize('Admin', 'SuperAdmin'), getUserForAdjustment);
 router.get('/admin/payments/wallets/user/:id/transactions', protect, authorize('Admin', 'SuperAdmin'), getUserTransactions);
+
+// Admin Call Management
+router.get('/admin/calls', protect, authorize('Admin', 'SuperAdmin'), (req, res, next) => {
+    const { getAllCalls } = require('../controllers/callController');
+    getAllCalls(req, res, next);
+});
 
 // Coupon routes
 // Coupon routes

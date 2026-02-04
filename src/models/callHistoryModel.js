@@ -20,11 +20,12 @@ const createCallHistoryTable = async () => {
   `;
   await pool.query(query);
 
-  // Migration: Add topicId if it doesn't exist
+  // Migration: Add topicId and recording_url if they don't exist
   try {
     await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS topicId INT REFERENCES topics(id)');
+    await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS recording_url TEXT');
   } catch (e) {
-    console.error('Migration failed for call_history topicId:', e.message);
+    console.error('Migration failed for call_history columns:', e.message);
   }
 };
 

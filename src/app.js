@@ -19,6 +19,10 @@ const { initSocket } = require('./services/socketService');
 
 const app = express();
 const server = http.createServer(app);
+const path = require('path');
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Initialize Socket.io
 initSocket(server);
@@ -27,7 +31,16 @@ initSocket(server);
 startTrialExpirationJob();
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+            "media-src": ["'self'", "https:", "blob:", process.env.BACKEND_URL || "http://localhost:5000"],
+            "img-src": ["'self'", "data:", "https:", process.env.BACKEND_URL || "http://localhost:5000"],
+            "connect-src": ["'self'", "https:", process.env.BACKEND_URL || "http://localhost:5000", "ws://localhost:5000", "wss://localhost:5000"]
+        },
+    },
+}));
 app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json({ strict: false }));

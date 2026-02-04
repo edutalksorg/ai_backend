@@ -1,0 +1,15 @@
+[
+  {
+    "id": 30,
+    "callerid": 7,
+    "calleeid": 6,
+    "channelname": null,
+    "status": "completed",
+    "durationseconds": 26,
+    "startedat": "2026-02-03T15:47:34.073Z",
+    "endedat": "2026-02-03T15:48:01.047Z",
+    "rating": 5,
+    "topicid": null,
+    "recording_url": "/uploads/recordings/recording-1770133682515-975438559.webm"
+  }
+]

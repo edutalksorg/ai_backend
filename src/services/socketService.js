@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db'); // Import DB pool for status updates
+const { isUserCallEligible } = require('../utils/userUtils');
 
 let io;
 const userSockets = new Map(); // userId (string) -> Set of socketIds
@@ -41,6 +42,7 @@ const initSocket = (server) => {
 
         // Mark user as Online in DB immediately
         updateUserStatus(userId, 'Online');
+        notifyFriendsOfStatusChange(userId, 'Online');
 
         socket.on('disconnect', async () => {
             console.log(`[Socket] User ${userId} disconnected (${socket.id})`);
@@ -52,6 +54,7 @@ const initSocket = (server) => {
                     // Mark user as Offline in DB if no other tabs open
                     console.log(`[Socket] User ${userId} has no more active connections. Setting to Offline.`);
                     await updateUserStatus(userId, 'Offline');
+                    await notifyFriendsOfStatusChange(userId, 'Offline');
                 }
             }
         });
@@ -111,9 +114,53 @@ const sendToRoom = (callId, event, data) => {
     io.to(`call_${callId}`).emit(event.toLowerCase(), data);
 };
 
+// New: Notify friends of status change
+const notifyFriendsOfStatusChange = async (userId, status) => {
+    try {
+        console.log(`[Socket] 🔔 Notifying friends of user ${userId} status change: ${status}`);
+
+        // 1. Get Confirm Friends
+        const { rows: friends } = await pool.query(`
+            SELECT 
+                CASE 
+                    WHEN requester_id = $1 THEN recipient_id 
+                    ELSE requester_id 
+                END as "friendId"
+            FROM user_connections 
+            WHERE (requester_id = $1 OR recipient_id = $1) 
+              AND status = 'accepted'
+        `, [userId]);
+
+        if (friends.length === 0) return;
+
+        // 2. Calculate Eligibility for current user
+        // We need the user's role and sub status. 
+        // Ideally we fetch full user object, but isUserCallEligible takes {id, role} + DB lookups.
+        const { rows: userRes } = await pool.query('SELECT id, role FROM users WHERE id = $1', [userId]);
+        if (userRes.length === 0) return;
+
+        const isEligible = await isUserCallEligible(userRes[0]);
+
+        const payload = {
+            userId: userId,
+            onlineStatus: status, // 'Online' or 'Offline'
+            isCallEligible: isEligible
+        };
+
+        // 3. Broadcast to each friend
+        for (const friend of friends) {
+            sendToUser(friend.friendId, 'UserEligibilityChanged', payload);
+        }
+
+    } catch (error) {
+        console.error(`[Socket] Error notifying friends for user ${userId}:`, error);
+    }
+};
+
 module.exports = {
     initSocket,
     sendToUser,
     sendToRoom,
+    notifyFriendsOfStatusChange,
     getIO: () => io
 };

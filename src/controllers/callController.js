@@ -1,5 +1,6 @@
 const pool = require('../config/db');
-const { sendToUser, sendToRoom } = require('../services/socketService');
+
+const { sendToUser, sendToRoom, notifyFriendsOfStatusChange } = require('../services/socketService');
 
 // @desc    Update availability
 // @route   PUT /api/v1/calls/availability
@@ -10,6 +11,10 @@ const updateAvailability = async (req, res) => {
         const userId = req.user.id;
         // Postgres: lastActiveAt -> 'lastactiveat'
         await pool.query('UPDATE users SET status = $1, lastactiveat = NOW() WHERE id = $2', [status, userId]);
+
+        // Notify friends of the manual status change
+        notifyFriendsOfStatusChange(userId, status);
+
         res.json({ success: true, message: 'Status updated' });
     } catch (error) {
         console.error(error);
@@ -17,53 +22,7 @@ const updateAvailability = async (req, res) => {
     }
 };
 
-const isUserCallEligible = async (user) => {
-    if (['Admin', 'SuperAdmin', 'Instructor'].includes(user.role)) {
-        return true;
-    }
-
-    // 1. Check for ANY active subscription (Paid or Free Trial)
-    // We strictly require an active token/subscription for calls now.
-    // "Free usage is 24 hours from their joining time" -> This is handled by the subscription endDate.
-    const { rows: subs } = await pool.query(`
-        SELECT s.*, p.name as "planName" 
-        FROM subscriptions s 
-        JOIN plans p ON s.planid = p.id 
-        WHERE s.userid = $1 AND s.status = 'active' AND s.enddate > NOW()
-    `, [user.id]);
-
-    if (subs.length === 0) {
-        // No active subscription (expired trial or cancelled).
-        // Access revoked.
-        return false;
-    }
-
-    const subscription = subs[0];
-    const planName = subscription.planName.toLowerCase();
-
-    // 2. Paid Plans = Unlimited
-    if (planName.includes('monthly') || planName.includes('quarterly') || planName.includes('yearly')) {
-        return true;
-    }
-
-    // 3. Free Trial = 5 Minute Limit (Daily)
-    // Calculate usage for TODAY only
-    const { rows: calls } = await pool.query(`
-        SELECT durationseconds as "durationSeconds"
-        FROM call_history 
-        WHERE (callerid = $1 OR calleeid = $1) 
-          AND status = 'completed'
-          AND startedat >= CURRENT_DATE
-    `, [user.id]);
-
-    let totalSeconds = 0;
-    for (const call of calls) {
-        totalSeconds += (call.durationSeconds || 0);
-    }
-
-    // 5 minutes = 300 seconds
-    return totalSeconds < 300;
-};
+const { isUserCallEligible } = require('../utils/userUtils');
 
 // @desc    Get available users
 // @route   GET /api/v1/calls/available-users
@@ -292,16 +251,14 @@ const getCallHistory = async (req, res) => {
     try {
         const userId = req.user.id;
         const { rows: history } = await pool.query(
-            `SELECT ch.id, ch.status, ch.channelname as "channelName", ch.durationseconds as "durationSeconds", ch.startedat as "startedAt", ch.endedat as "endedAt", ch.rating,
+            `SELECT ch.id, ch.status, ch.channelname as "channelName", ch.durationseconds as "durationSeconds", 
+                    ch.startedat as "startedAt", ch.endedat as "endedAt", ch.rating, ch.recording_url as "recordingUrl",
                     u.fullname as "otherUserName", 
                     CASE WHEN ch.callerid = $1 THEN FALSE ELSE TRUE END as "isIncoming"
              FROM call_history ch 
              LEFT JOIN users u ON (ch.callerid = u.id OR ch.calleeid = u.id) AND u.id != $2
              WHERE ch.callerid = $3 OR ch.calleeid = $4 
              ORDER BY ch.startedat DESC`,
-            // Columns need casing if logic expects camelCase. 
-            // My implementation alias: otherUserName. 
-            // ch.* is risky if I want camelCase.
             [userId, userId, userId, userId]
         );
         res.json({ success: true, data: history });
@@ -351,6 +308,79 @@ const rateCall = async (req, res) => {
     }
 };
 
+// @desc    Upload call recording
+// @route   POST /api/v1/calls/:id/recording
+// @access  Private
+const uploadRecording = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!req.file) {
+            return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        // Construct public URL
+        const recordingUrl = `/uploads/recordings/${req.file.filename}`;
+
+        // Update DB
+        await pool.query(
+            'UPDATE call_history SET recording_url = $1 WHERE id = $2',
+            [recordingUrl, id]
+        );
+
+        res.json({ success: true, url: recordingUrl });
+    } catch (error) {
+        console.error('[uploadRecording] Error:', error);
+        res.status(500).json({ message: 'Server error during upload' });
+    }
+};
+
+// @desc    Get all call records (Admin)
+// @route   GET /api/v1/admin/calls
+// @access  Private/Admin
+const getAllCalls = async (req, res) => {
+    try {
+        const { search, page = 1, limit = 50 } = req.query;
+        const offset = (page - 1) * limit;
+
+        let query = `
+            SELECT 
+                ch.id as "callId", 
+                u1.fullname as "callerName", 
+                u2.fullname as "calleeName", 
+                ch.startedat as "startedAt", 
+                ch.durationseconds as "durationSeconds", 
+                ch.status, 
+                ch.recording_url as "recordingUrl"
+            FROM call_history ch
+            LEFT JOIN users u1 ON ch.callerid = u1.id
+            LEFT JOIN users u2 ON ch.calleeid = u2.id
+        `;
+
+        const queryParams = [];
+        if (search) {
+            query += ` WHERE 
+                u1.fullname ILIKE $1 OR 
+                u1.email ILIKE $1 OR 
+                u1.phonenumber ILIKE $1 OR 
+                u2.fullname ILIKE $1 OR 
+                u2.email ILIKE $1 OR 
+                u2.phonenumber ILIKE $1 OR 
+                ch.id::text ILIKE $1`;
+            queryParams.push(`%${search}%`);
+        }
+
+        query += ` ORDER BY ch.startedat DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+        queryParams.push(limit, offset);
+
+        const { rows } = await pool.query(query, queryParams);
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error('Error fetching all calls:', error);
+        res.status(500).json({ message: 'Error fetching call records' });
+    }
+};
+
 module.exports = {
     updateAvailability,
     getAvailableUsers,
@@ -359,5 +389,7 @@ module.exports = {
     respondToCall,
     endCall,
     getCallHistory,
-    rateCall
+    rateCall,
+    uploadRecording,
+    getAllCalls
 };
