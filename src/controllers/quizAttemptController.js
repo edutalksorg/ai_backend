@@ -54,8 +54,15 @@ const submitQuiz = async (req, res) => {
         let correctCount = 0;
         let totalQuestions = quizQuestions.length;
 
-        quizQuestions.forEach(question => {
-            const userAnswer = answers.find(a => a.questionId === question.id);
+        quizQuestions.forEach((question, index) => {
+            // Try matching by ID first
+            let userAnswer = answers.find(a => a.questionId === question.id);
+
+            // Fallback: match by index if ID match failed (handles questions without IDs)
+            if (!userAnswer) {
+                userAnswer = answers.find(a => String(a.questionId) === String(index));
+            }
+
             if (userAnswer && userAnswer.selectedOption === question.correctAnswer) {
                 correctCount++;
             }
