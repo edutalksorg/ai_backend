@@ -20,7 +20,7 @@ const ensureReferralCode = async (userId) => {
 const getMyCode = async (req, res) => {
     try {
         const code = await ensureReferralCode(req.user.id);
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const frontendUrl = process.env.FRONTEND_URL;
         res.json({
             success: true,
             data: {
@@ -56,7 +56,7 @@ const getReferralStats = async (req, res) => {
                 referralCode: code,
                 totalReferrals: parseInt(referrals[0].count),
                 totalEarnings: parseFloat(earnings[0].total || 0),
-                referralLink: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${code}`
+                referralLink: `${process.env.FRONTEND_URL}/register?ref=${code}`
             }
         });
     } catch (error) {

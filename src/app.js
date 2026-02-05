@@ -40,19 +40,20 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-            "media-src": ["'self'", "https:", "blob:", process.env.BACKEND_URL || "http://localhost:5000"],
-            "img-src": ["'self'", "data:", "https:", process.env.BACKEND_URL || "http://localhost:5000"],
-            "connect-src": ["'self'", "https:", process.env.BACKEND_URL || "http://localhost:5000", "ws://localhost:5000", "wss://localhost:5000"]
+            "media-src": ["'self'", "https:", "blob:", process.env.BACKEND_URL],
+            "img-src": ["'self'", "data:", "https:", process.env.BACKEND_URL],
+            "connect-src": ["'self'", "https:", process.env.BACKEND_URL, "ws://localhost:5000", "wss://localhost:5000"]
         },
     },
 }));
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',')
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
     : [
         'http://localhost:3000',
         'http://localhost:5173',
         'https://d1ls14uofwgojt.cloudfront.net'
     ];
+console.log(`📡 [CONFIG] Allowed Origins: ${allowedOrigins.join(', ')}`);
 
 app.use(cors({
     origin: function (origin, callback) {

@@ -22,7 +22,7 @@ const initiatePayment = async (amount, transactionId, merchantUserId, mobileNumb
             ? `${process.env.PHONEPE_REDIRECT_URL}?transactionId=${transactionId}`
             : `${process.env.FRONTEND_URL}/subscriptions?transactionId=${transactionId}`,
         redirectMode: 'REDIRECT',
-        callbackUrl: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/v1/payments/callback`,
+        callbackUrl: `${process.env.BACKEND_URL}/api/v1/payments/callback`,
         mobileNumber: mobileNumber || '9999999999',
         paymentInstrument: {
             type: 'PAY_PAGE',
@@ -94,7 +94,7 @@ const checkPaymentStatus = async (merchantTransactionId) => {
     const merchantId = process.env.PHONEPE_MERCHANT_ID;
     const saltKey = process.env.PHONEPE_SALT_KEY;
     const saltIndex = process.env.PHONEPE_SALT_INDEX || 1;
-    const baseUrl = process.env.PHONEPE_API_BASE_URL || 'https://api-preprod.phonepe.com/apis/pg-sandbox';
+    const baseUrl = process.env.PHONEPE_API_BASE_URL;
     const statusEndpoint = `/pg/v1/status/${merchantId}/${merchantTransactionId}`;
     const statusUrl = `${baseUrl}${statusEndpoint}`;
 

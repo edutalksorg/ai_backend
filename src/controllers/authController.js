@@ -293,7 +293,7 @@ const forgotPassword = async (req, res) => {
             [resetPasswordToken, resetPasswordExpire, user.id]
         );
 
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const frontendUrl = process.env.FRONTEND_URL;
         const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}&userId=${user.id}`;
 
         try {

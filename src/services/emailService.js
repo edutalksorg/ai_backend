@@ -20,7 +20,7 @@ const sendVerificationEmail = async (email, fullName, token) => {
         const timestamp = new Date().toLocaleTimeString();
         console.log(`[DEBUG] Attempting unique send for ${email} with ID: ${shortToken}`);
 
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const frontendUrl = process.env.FRONTEND_URL;
         const verifyUrl = `${frontendUrl}/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
 
         const mailOptions = {
@@ -120,7 +120,7 @@ const sendPromotionalEmail = async (email, fullName) => {
                     </div>
 
                     <div style="text-align: center; margin-top: 40px;">
-                        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}" 
+                        <a href="${process.env.FRONTEND_URL}" 
                            style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); 
                                   color: white; 
                                   padding: 16px 32px; 
