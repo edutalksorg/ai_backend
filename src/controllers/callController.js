@@ -150,7 +150,10 @@ const initiateRandomCall = async (req, res) => {
         }
 
         if (!callee) {
-            return res.status(404).json({ message: 'No available users found' });
+            return res.json({
+                success: false,
+                message: 'No available users found at the moment. Please try again later.'
+            });
         }
 
         const { rows: result } = await pool.query(
