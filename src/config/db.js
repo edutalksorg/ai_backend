@@ -9,13 +9,11 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
     max: 10,
     idleTimeoutMillis: 30000,
-    ssl: {
-        rejectUnauthorized: false
-    }
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false
 });
 
 pool.on('connect', () => {
-    // console.log('Connected to PostgreSQL database');
+    // console.log(`Connected to PostgreSQL: ${pool.options.database}`);
 });
 
 pool.on('error', (err) => {

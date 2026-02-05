@@ -221,8 +221,8 @@ const subscribe = async (req, res) => {
 
             if (couponId) {
                 await pool.query(
-                    'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount) VALUES ($1, $2, $3, $4)',
-                    [couponId, userId, merchantTransactionId, discountAmount]
+                    'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount, status) VALUES ($1, $2, $3, $4, $5)',
+                    [couponId, userId, merchantTransactionId, discountAmount, 'pending']
                 );
             }
 
@@ -256,8 +256,8 @@ const subscribe = async (req, res) => {
 
         if (couponId) {
             await pool.query(
-                'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount) VALUES ($1, $2, $3, $4)',
-                [couponId, userId, `SUB-${subResult[0].id}`, discountAmount]
+                'INSERT INTO coupon_usages (couponId, userId, orderId, discountAmount, status) VALUES ($1, $2, $3, $4, $5)',
+                [couponId, userId, `SUB-${subResult[0].id}`, discountAmount, 'completed']
             );
             await pool.query('UPDATE coupons SET currentUsageCount = currentUsageCount + 1 WHERE id = $1', [couponId]);
         }

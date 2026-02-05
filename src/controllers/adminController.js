@@ -561,7 +561,7 @@ const getCouponUsageUsers = async (req, res) => {
                 cu.orderid as "orderId"
             FROM coupon_usages cu
             JOIN users u ON cu.userid = u.id
-            WHERE cu.couponid = $1
+            WHERE cu.couponid = $1 AND cu.status = 'completed'
             ORDER BY cu.usedat DESC
         `;
 

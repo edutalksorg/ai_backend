@@ -28,6 +28,7 @@ const createCouponTable = async () => {
       couponId INT NOT NULL,
       userId INT NOT NULL,
       orderId VARCHAR(255),
+      status VARCHAR(50) DEFAULT 'pending',
       usedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       discountAmount DECIMAL(10, 2),
       FOREIGN KEY (couponId) REFERENCES coupons(id) ON DELETE CASCADE,
@@ -35,6 +36,11 @@ const createCouponTable = async () => {
     )
   `;
   await pool.query(usageQuery);
+
+  // Ensure 'status' column exists for existing tables
+  await pool.query(`
+    ALTER TABLE coupon_usages ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending'
+  `);
 };
 
 module.exports = createCouponTable;

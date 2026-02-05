@@ -9,8 +9,12 @@ const userSockets = new Map(); // userId (string) -> Set of socketIds
 const initSocket = (server) => {
     io = new Server(server, {
         cors: {
-            origin: "*", // Adjust as needed
-            methods: ["GET", "POST"]
+            origin: [
+                "http://localhost:3000",
+                "https://d1ls14uofwgojt.cloudfront.net/"
+            ],
+            methods: ["GET", "POST"],
+            credentials: true
         }
     });
 

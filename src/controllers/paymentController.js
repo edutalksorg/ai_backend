@@ -97,8 +97,14 @@ const verifyRazorpayPayment = async (req, res) => {
                          WHERE id = (SELECT couponId FROM coupon_usages WHERE orderId = $1 LIMIT 1)`,
                         [originalOrderId]
                     );
+
+                    // Also update the coupon_usages status to completed
+                    await pool.query(
+                        `UPDATE coupon_usages SET status = 'completed' WHERE orderId = $1`,
+                        [originalOrderId]
+                    );
                 } catch (couponError) {
-                    console.error('❌ [Payment] Failed to update coupon usage count:', couponError);
+                    console.error('❌ [Payment] Failed to update coupon usage:', couponError);
                 }
             }
 
