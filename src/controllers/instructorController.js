@@ -160,7 +160,28 @@ const getQuizzes = async (req, res) => {
         const userId = req.user.id;
         const role = req.user.role;
 
-        let query = 'SELECT * FROM quizzes WHERE isdeleted = FALSE';
+        let query = `
+            SELECT 
+                id, 
+                title, 
+                description, 
+                topicid AS "topicId", 
+                questions, 
+                duration, 
+                difficulty, 
+                ispublished AS "isPublished", 
+                instructorid AS "instructorId", 
+                categoryid AS "categoryId", 
+                passingscore AS "passingScore", 
+                timelimitminutes AS "timeLimitMinutes", 
+                randomizequestions AS "randomizeQuestions", 
+                maxattempts AS "maxAttempts", 
+                showcorrectanswers AS "showCorrectAnswers",
+                createdat AS "createdAt", 
+                updatedat AS "updatedAt"
+            FROM quizzes 
+            WHERE isdeleted = FALSE
+        `;
         let params = [];
         let paramIdx = 1;
 
@@ -170,6 +191,8 @@ const getQuizzes = async (req, res) => {
         } else if (role !== 'Admin' && role !== 'SuperAdmin') {
             query += ` AND ispublished = TRUE`;
         }
+
+        query += ' ORDER BY createdat DESC';
 
         const { rows: quizzes } = await pool.query(query, params);
         res.json({ success: true, data: quizzes });
@@ -181,13 +204,36 @@ const getQuizzes = async (req, res) => {
 
 const getQuizById = async (req, res) => {
     try {
-        const { rows: quizzes } = await pool.query('SELECT * FROM quizzes WHERE id = $1 AND isdeleted = FALSE', [req.params.id]);
+        const query = `
+            SELECT 
+                id, 
+                title, 
+                description, 
+                topicid AS "topicId", 
+                questions, 
+                duration, 
+                difficulty, 
+                ispublished AS "isPublished", 
+                instructorid AS "instructorId", 
+                categoryid AS "categoryId", 
+                passingscore AS "passingScore", 
+                timelimitminutes AS "timeLimitMinutes", 
+                randomizequestions AS "randomizeQuestions", 
+                maxattempts AS "maxAttempts", 
+                showcorrectanswers AS "showCorrectAnswers",
+                createdat AS "createdAt", 
+                updatedat AS "updatedAt"
+            FROM quizzes 
+            WHERE id = $1 AND isdeleted = FALSE
+        `;
+        const { rows: quizzes } = await pool.query(query, [req.params.id]);
+
         if (quizzes.length === 0) {
             return res.status(404).json({ message: 'Quiz not found' });
         }
 
         const quiz = quizzes[0];
-        // quiz.questions -> jsonb
+        // JSONB columns are usually returned as objects by pg, but we'll safeguard
         if (quiz.questions && typeof quiz.questions === 'string') {
             try { quiz.questions = JSON.parse(quiz.questions); } catch (e) { }
         }
@@ -202,9 +248,19 @@ const getQuizById = async (req, res) => {
 const createQuiz = async (req, res) => {
     try {
         const {
-            title, description, topicId, questions, duration, difficulty,
-            isPublished, categoryId, passingScore, timeLimitMinutes,
-            randomizeQuestions, maxAttempts, showCorrectAnswers
+            title, Title,
+            description, Description,
+            topicId, topicid, TopicId,
+            questions, Questions,
+            duration, Duration,
+            difficulty, Difficulty,
+            isPublished, ispublished, IsPublished,
+            categoryId, categoryid, CategoryId,
+            passingScore, passingscore, PassingScore,
+            timeLimitMinutes, timelimitminutes, TimeLimitMinutes,
+            randomizeQuestions, randomizequestions, RandomizeQuestions,
+            maxAttempts, maxattempts, MaxAttempts,
+            showCorrectAnswers, showcorrectanswers, ShowCorrectAnswers
         } = req.body;
         const instructorId = req.user.id;
 
@@ -215,17 +271,22 @@ const createQuiz = async (req, res) => {
                 timelimitminutes, randomizequestions, maxattempts, showcorrectanswers
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
             [
-                title, description, topicId || null, JSON.stringify(questions || []),
-                duration || 30, difficulty || 'Beginner', isPublished || false,
-                instructorId, categoryId || null, passingScore || 60,
-                timeLimitMinutes || duration || 20, randomizeQuestions ?? true,
-                maxAttempts || 2, showCorrectAnswers ?? true
+                title || Title, description || Description, topicId || topicid || TopicId || null,
+                JSON.stringify(questions || Questions || []),
+                duration || Duration || 30, difficulty || Difficulty || 'Beginner',
+                isPublished || ispublished || IsPublished || false,
+                instructorId, categoryId || categoryid || CategoryId || null,
+                passingScore || passingscore || PassingScore || 60,
+                timeLimitMinutes || timelimitminutes || TimeLimitMinutes || duration || Duration || 20,
+                randomizeQuestions ?? randomizequestions ?? RandomizeQuestions ?? true,
+                maxAttempts || maxattempts || MaxAttempts || 2,
+                showCorrectAnswers ?? showcorrectanswers ?? ShowCorrectAnswers ?? true
             ]
         );
 
         res.status(201).json({
             success: true,
-            data: { id: result[0].id, title },
+            data: { id: result[0].id, title: title || Title },
         });
     } catch (error) {
         console.error(error);
@@ -235,23 +296,45 @@ const createQuiz = async (req, res) => {
 
 const updateQuiz = async (req, res) => {
     try {
-        const {
-            title, description, questions, duration, difficulty,
-            isPublished, isDeleted, categoryId, passingScore,
-            timeLimitMinutes, randomizeQuestions, maxAttempts, showCorrectAnswers
-        } = req.body;
         const quizId = req.params.id;
+        // Handle both casing possibilities from frontend
+        const {
+            title, title: Title,
+            description, description: Description,
+            questions, questions: Questions,
+            duration, duration: Duration,
+            difficulty, difficulty: Difficulty,
+            isPublished, ispublished, isPublished: IsPublished,
+            categoryId, categoryid, categoryId: CategoryId,
+            passingScore, passingscore, passingScore: PassingScore,
+            timeLimitMinutes, timelimitminutes, timeLimitMinutes: TimeLimitMinutes,
+            randomizeQuestions, randomizequestions, randomizeQuestions: RandomizeQuestions,
+            maxAttempts, maxattempts, maxAttempts: MaxAttempts,
+            showCorrectAnswers, showcorrectanswers, showCorrectAnswers: ShowCorrectAnswers
+        } = req.body;
+
+        // Fetch current quiz to preserve publish status if not provided
+        const { rows: current } = await pool.query('SELECT ispublished FROM quizzes WHERE id = $1', [quizId]);
+        if (current.length === 0) return res.status(404).json({ message: 'Quiz not found' });
+
+        const finalizedStatus = isPublished ?? ispublished ?? IsPublished ?? current[0].ispublished;
 
         await pool.query(
             `UPDATE quizzes SET 
                 title=$1, description=$2, questions=$3, duration=$4, difficulty=$5, 
-                ispublished=$6, isdeleted=$7, categoryid=$8, passingscore=$9, 
-                timelimitminutes=$10, randomizequestions=$11, maxattempts=$12, showcorrectanswers=$13 
-            WHERE id=$14`,
+                ispublished=$6, categoryid=$7, passingscore=$8, 
+                timelimitminutes=$9, randomizequestions=$10, maxattempts=$11, showcorrectanswers=$12,
+                updatedat=CURRENT_TIMESTAMP
+            WHERE id=$13`,
             [
-                title, description, JSON.stringify(questions), duration, difficulty,
-                isPublished, isDeleted || false, categoryId, passingScore,
-                timeLimitMinutes, randomizeQuestions, maxAttempts, showCorrectAnswers,
+                title || Title, description || Description, JSON.stringify(questions || Questions),
+                duration || Duration || 30, difficulty || Difficulty || 'Beginner',
+                finalizedStatus, categoryId || categoryid || CategoryId,
+                passingScore || passingscore || PassingScore || 60,
+                timeLimitMinutes || timelimitminutes || TimeLimitMinutes || duration || Duration || 20,
+                randomizeQuestions ?? randomizequestions ?? RandomizeQuestions ?? true,
+                maxAttempts || maxattempts || MaxAttempts || 2,
+                showCorrectAnswers ?? showcorrectanswers ?? ShowCorrectAnswers ?? true,
                 quizId
             ]
         );
