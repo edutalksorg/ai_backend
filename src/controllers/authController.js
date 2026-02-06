@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const { verifyPassword, hashPassword } = require('../utils/passwordUtils');
 const pool = require('../config/db');
 const generateToken = require('../utils/generateToken');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/emailService');
@@ -26,8 +27,7 @@ const registerUser = async (req, res) => {
             }
         }
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
+        const hashedPassword = await hashPassword(password);
 
         // Normalize role
         const normalizedRole = role ? role.charAt(0).toUpperCase() + role.slice(1).toLowerCase() : 'User';
@@ -195,7 +195,23 @@ const loginUser = async (req, res) => {
         const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [identifier]);
         const user = users[0];
 
-        if (user && (await bcrypt.compare(password, user.password))) {
+        if (!user) {
+            console.log(`❌ Login attempt: User not found (${identifier})`);
+            return res.status(401).json({ message: 'Invalid email or password' });
+        }
+
+        console.log(`🔍 Attempting login for: ${identifier}`);
+        const isPasswordCorrect = await verifyPassword(password, user.password);
+        console.log(`🔑 Password verification: ${isPasswordCorrect ? '✅ SUCCESS' : '❌ FAILED'}`);
+
+        if (isPasswordCorrect) {
+            // Check if password needs upgrade (if it's not bcrypt)
+            if (!user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
+                console.log(`🔒 Upgrading legacy password for user: ${user.email}`);
+                const newHashedPassword = await hashPassword(password);
+                await pool.query('UPDATE users SET password = $1 WHERE id = $2', [newHashedPassword, user.id]);
+                user.password = newHashedPassword; // Update local user object
+            }
             const needsVerification = user.role === 'User' || user.role === 'Instructor';
             // uses lowercase access
             if (needsVerification && !user.isverified) {
@@ -362,8 +378,7 @@ const resetPassword = async (req, res) => {
         }
 
         const user = users[0];
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(newPassword, salt);
+        const hashedPassword = await hashPassword(newPassword);
 
         await pool.query(
             'UPDATE users SET password = $1, resetPasswordToken = NULL, resetPasswordExpire = NULL WHERE id = $2',
