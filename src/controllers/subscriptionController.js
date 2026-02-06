@@ -293,7 +293,9 @@ const getCurrentSubscription = async (req, res) => {
             SELECT s.*, p.name as "planName", p.price, p.billingcycle as "billingCycle" 
             FROM subscriptions s 
             JOIN plans p ON s.planid = p.id 
-            WHERE s.userid = $1 AND s.status = 'active'
+            WHERE s.userid = $1 
+              AND s.status = 'active'
+              AND (s.enddate IS NULL OR s.enddate > NOW())
             ORDER BY s.enddate DESC LIMIT 1
         `, [userId]);
 
