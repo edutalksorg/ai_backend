@@ -16,27 +16,22 @@ const checkContentAccess = async (req, res, next) => {
             return next();
         }
 
-        // 2. Check for active PRO subscription
-        const { rows: subs } = await pool.query(`
-            SELECT s.*, p.name as "planName" 
-            FROM subscriptions s 
-            JOIN plans p ON s.planid = p.id 
-            WHERE s.userid = $1 AND s.status = 'active' AND s.enddate > NOW()
-        `, [user.id]);
+        // 2. Check for active PRO subscription (Info fetched in auth middleware)
+        const status = (user.subscriptionStatus || '').toLowerCase();
+        const plan = (user.subscriptionPlan || '').toLowerCase();
 
-        if (subs.length > 0) {
-            const planName = (subs[0].planName || '').toLowerCase();
-            if (planName.includes('monthly') ||
-                planName.includes('quarterly') ||
-                planName.includes('yearly') ||
-                planName.includes('free') ||
-                planName.includes('trial')) {
+        if (status === 'active') {
+            // Check if the plan matches one of the allowed pro plans
+            if (plan.includes('monthly') ||
+                plan.includes('quarterly') ||
+                plan.includes('yearly') ||
+                plan.includes('free') ||
+                plan.includes('trial')) {
                 return next();
             }
         }
 
-        // 3. (Removed) Check for 24-hour trial (based on user registration)
-        // Trial is now managed via subscriptions table and handled in step 2 above.
+        // 3. (Removed) Old check for registration timestamp
 
         // 4. Default: Access Denied
         return res.status(403).json({
