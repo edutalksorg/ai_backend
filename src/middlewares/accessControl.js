@@ -16,11 +16,14 @@ const checkContentAccess = async (req, res, next) => {
             return next();
         }
 
-        // 2. Check for active PRO subscription (Info fetched in auth middleware)
+        // 2. Check for active PRO subscription and verify expiration
         const status = (user.subscriptionStatus || '').toLowerCase();
         const plan = (user.subscriptionPlan || '').toLowerCase();
+        const expiryDate = user.trialEndDate ? new Date(user.trialEndDate) : null;
+        const now = new Date();
 
-        if (status === 'active') {
+        // Access allowed if status is active AND it has not expired
+        if (status === 'active' && expiryDate && now < expiryDate) {
             // Check if the plan matches one of the allowed pro plans
             if (plan.includes('monthly') ||
                 plan.includes('quarterly') ||

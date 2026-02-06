@@ -128,25 +128,57 @@ async function migrate() {
 
             const planId = planMap[s.PlanId] || 1;
 
+            // Robust Date Handling: Use TrialEndsAt for trials, RenewalDate for plans
+            let endDate = null;
+            if (s.IsFreeTrial === true || s.IsFreeTrial === 'True') {
+                endDate = s.TrialEndsAt;
+            } else {
+                endDate = s.RenewalDate || s.EndDate;
+            }
+
+            if (endDate === 'NULL' || !endDate) endDate = null;
+
             try {
-                await pool.query(
-                    `INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus, createdAt) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [
-                        newUserId,
-                        planId,
-                        (s.Status || 'pending').toLowerCase(),
-                        s.StartDate || new Date(),
-                        s.EndDate === 'NULL' || !s.EndDate ? null : s.EndDate,
-                        s.IsFreeTrial === true ? 'free' : 'paid',
-                        s.CreatedAt || new Date()
-                    ]
+                // Check if this subscription already exists for this user and plan
+                const { rows: existingSub } = await pool.query(
+                    'SELECT id FROM subscriptions WHERE userId = $1 AND planId = $2',
+                    [newUserId, planId]
                 );
-                console.log(`✅ Subscribed User: ${newUserId}`);
-            } catch (err) {
-                if (!err.message.includes('unique constraint')) {
-                    console.error(`❌ Sub error for User ${newUserId}:`, err.message);
+
+                if (existingSub.length > 0) {
+                    await pool.query(
+                        `UPDATE subscriptions SET 
+                            endDate = $1, 
+                            status = $2, 
+                            paymentStatus = $3, 
+                            updatedAt = NOW() 
+                         WHERE id = $4`,
+                        [
+                            endDate,
+                            (s.Status || 'pending').toLowerCase(),
+                            (s.IsFreeTrial === true || s.IsFreeTrial === 'True') ? 'free' : 'paid',
+                            existingSub[0].id
+                        ]
+                    );
+                    console.log(`🔄 Updated Sub for User: ${newUserId} (ID: ${existingSub[0].id}, End: ${endDate || 'N/A'})`);
+                } else {
+                    await pool.query(
+                        `INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus, createdAt) 
+                         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                        [
+                            newUserId,
+                            planId,
+                            (s.Status || 'pending').toLowerCase(),
+                            s.StartDate || new Date(),
+                            endDate,
+                            (s.IsFreeTrial === true || s.IsFreeTrial === 'True') ? 'free' : 'paid',
+                            s.CreatedAt || new Date()
+                        ]
+                    );
+                    console.log(`✅ New Sub for User: ${newUserId} (End: ${endDate || 'N/A'})`);
                 }
+            } catch (err) {
+                console.error(`❌ Sub error for User ${newUserId}:`, err.message);
             }
         }
 

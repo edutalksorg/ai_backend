@@ -27,9 +27,7 @@ const protect = async (req, res, next) => {
                  LEFT JOIN LATERAL (
                     SELECT status, planid, enddate 
                     FROM subscriptions 
-                    WHERE userid = u.id 
-                      AND status = 'active' 
-                      AND (enddate IS NULL OR enddate > NOW())
+                    WHERE userid = u.id AND (status = 'active' OR status = 'expired')
                     ORDER BY enddate DESC LIMIT 1
                  ) s ON true
                  LEFT JOIN plans p ON s.planid = p.id

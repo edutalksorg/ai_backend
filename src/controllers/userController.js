@@ -76,7 +76,7 @@ const getUserProfile = async (req, res) => {
         const { rows: users } = await pool.query(`
             SELECT u.id, u.fullName as "fullName", u.email, u.phoneNumber as "phoneNumber", u.role, u.isApproved as "isApproved", u.avatarUrl as "avatarUrl", 
                    u.walletBalance as "walletBalance", u.referralCode as "referralCode", u.createdAt as "createdAt",
-                   s.status as "subscriptionStatus", p.name as "subscriptionPlan", s.endDate as "trialEndDate",
+                   s.status as "subscriptionStatus", p.name as "subscriptionPlan", s.endDate as "endDate", s.endDate as "renewalDate",
                    ip.bio, ip.country
             FROM users u
             LEFT JOIN subscriptions s ON u.id = s.userId AND s.status = 'active'
