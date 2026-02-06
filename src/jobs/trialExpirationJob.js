@@ -14,7 +14,7 @@ const startTrialExpirationJob = () => {
 
             // Update subscriptions that have passed their endDate
             const result = await pool.query(
-                'UPDATE subscriptions SET status = \'expired\' WHERE planId = $1 AND status = \'active\' AND endDate < NOW()',
+                'UPDATE subscriptions SET status = \'expired\' WHERE planid = $1 AND status = \'active\' AND enddate < NOW()',
                 [planId]
             );
 

@@ -136,6 +136,19 @@ const verifyRazorpayPayment = async (req, res) => {
                 [sub.id]
             );
 
+            // --- Safe Switching: Cancel any previous active subscriptions ---
+            try {
+                const { rowCount: cancelledCount } = await pool.query(
+                    'UPDATE subscriptions SET status = \'cancelled\', updatedAt = NOW() WHERE userId = $1 AND status = \'active\' AND id != $2',
+                    [userId, sub.id]
+                );
+                if (cancelledCount > 0) {
+                    console.log(`♻️ [Payment] Cancelled ${cancelledCount} old active subscription(s) for user: ${userId}`);
+                }
+            } catch (cancelError) {
+                console.error('⚠️ [Payment] Failed to cancel old subscriptions during switch:', cancelError.message);
+            }
+
             // Notify Friends of Status Change (Real-time update)
             try {
                 const { rows: friends } = await pool.query(`

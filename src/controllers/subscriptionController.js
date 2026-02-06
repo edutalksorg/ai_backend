@@ -162,8 +162,13 @@ const subscribe = async (req, res) => {
         if (plans.length === 0) return res.status(404).json({ message: 'Plan not found' });
         const plan = plans[0];
 
+        // For switching, we allow creating a pending subscription even if an active one exists.
+        // The old active subscription will be cancelled only after successful payment verification.
         const { rows: existing } = await pool.query('SELECT * FROM subscriptions WHERE userId = $1 AND status = \'active\'', [userId]);
-        if (existing.length > 0) {
+
+        // Only block if trying to subscribe to something that doesn't require payment (free trial)
+        // or if they are trying to double-subscribe to an active plan.
+        if (existing.length > 0 && (useFreeTrial || plan.price === 0)) {
             return res.status(400).json({ message: 'User already has an active subscription' });
         }
 

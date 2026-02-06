@@ -35,14 +35,8 @@ const checkContentAccess = async (req, res, next) => {
             }
         }
 
-        // 3. Check for 24-hour trial (based on user registration)
-        const createdAt = new Date(user.createdAt);
-        const now = new Date();
-        const trialDuration = 24 * 60 * 60 * 1000; // 24 hours in ms
-
-        if (now - createdAt < trialDuration) {
-            return next();
-        }
+        // 3. (Removed) Check for 24-hour trial (based on user registration)
+        // Trial is now managed via subscriptions table and handled in step 2 above.
 
         // 4. Default: Access Denied
         return res.status(403).json({

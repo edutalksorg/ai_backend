@@ -93,38 +93,8 @@ const registerUser = async (req, res) => {
         const userId = result[0].id;
         const { rows: newUser } = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
 
-        // --- ADDED: Automatic 24-hour Free Trial ---
-        try {
-            console.log(`🎁 Granting free trial to user: ${email}`);
-            // 1. Get or create Trial Plan
-            let { rows: plans } = await pool.query('SELECT id FROM plans WHERE name = \'Free Trial\' LIMIT 1');
-            let planId;
-
-            if (plans.length === 0) {
-                // Create one if it doesn't exist
-                const { rows: planResult } = await pool.query(
-                    'INSERT INTO plans (name, description, price, billingCycle, trialDays) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                    ['Free Trial', '24-hour full access trial', 0, 'Free', 1]
-                );
-                planId = planResult[0].id; // Postgres RETURNING id
-                console.log('✅ Created "Free Trial" plan.');
-            } else {
-                planId = plans[0].id;
-            }
-
-            // 2. Create subscription
-            const startDate = new Date();
-            const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
-
-            await pool.query(
-                `INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) 
-                 VALUES ($1, $2, $3, $4, $5, $6)`,
-                [userId, planId, 'active', startDate, endDate, 'paid']
-            );
-            console.log(`✅ 24-hour trial activated for ${email}. Expires: ${endDate.toLocaleString()}`);
-        } catch (trialError) {
-            console.error('❌ Failed to grant free trial:', trialError.message);
-        }
+        // --- REMOVED: Automatic 24-hour Free Trial at Registration ---
+        // Trial will now be granted at first login.
 
         // Send verification email
         if (!isAdmin) {
@@ -242,13 +212,74 @@ const loginUser = async (req, res) => {
                 user.isapproved = true;
             }
 
+            // --- ADDED: Automatic 24-hour Free Trial at First Login ---
+            try {
+                // Check if user already has or had a free trial
+                const { rows: existingTrials } = await pool.query(
+                    'SELECT s.* FROM subscriptions s JOIN plans p ON s.planId = p.id WHERE s.userId = $1 AND p.name = \'Free Trial\'',
+                    [user.id]
+                );
+
+                if (existingTrials.length === 0) {
+                    console.log(`🎁 Granting first-time free trial to user: ${user.email}`);
+
+                    // 1. Get or create Trial Plan
+                    let { rows: plans } = await pool.query('SELECT id FROM plans WHERE name = \'Free Trial\' LIMIT 1');
+                    let planId;
+
+                    if (plans.length === 0) {
+                        const { rows: planResult } = await pool.query(
+                            'INSERT INTO plans (name, description, price, billingCycle, trialDays) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+                            ['Free Trial', '24-hour full access trial', 0, 'Free', 1]
+                        );
+                        planId = planResult[0].id;
+                    } else {
+                        planId = plans[0].id;
+                    }
+
+                    // 2. Create subscription starting NOW
+                    const startDate = new Date();
+                    const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+
+                    await pool.query(
+                        `INSERT INTO subscriptions (userId, planId, status, startDate, endDate, paymentStatus) 
+                         VALUES ($1, $2, $3, $4, $5, $6)`,
+                        [user.id, planId, 'active', startDate, endDate, 'paid']
+                    );
+                    console.log(`✅ 24-hour trial activated for ${user.email} from login. Expires: ${endDate.toLocaleString()}`);
+                }
+            } catch (trialError) {
+                console.error('❌ Failed to grant free trial at login:', trialError.message);
+            }
+
+            // Fetch final user data with subscription info (same logic as auth middleware)
+            const { rows: userDataRows } = await pool.query(
+                `SELECT 
+                    u.id, 
+                    u.fullname as "fullName", 
+                    u.email, 
+                    u.role, 
+                    u.isapproved as "isApproved",
+                    s.status as "subscriptionStatus",
+                    p.name as "subscriptionPlan",
+                    s.enddate as "trialEndDate"
+                 FROM users u
+                 LEFT JOIN LATERAL (
+                    SELECT status, planid, enddate 
+                    FROM subscriptions 
+                    WHERE userid = u.id AND status = 'active' 
+                    ORDER BY enddate DESC LIMIT 1
+                 ) s ON true
+                 LEFT JOIN plans p ON s.planid = p.id
+                 WHERE u.id = $1`,
+                [user.id]
+            );
+            const userData = userDataRows[0];
+
             res.json({
                 success: true,
                 data: {
-                    id: user.id,
-                    fullName: user.fullname,
-                    email: user.email,
-                    role: user.role,
+                    ...userData,
                     token: generateToken(user.id, user.role),
                 },
             });

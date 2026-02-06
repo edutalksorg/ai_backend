@@ -14,8 +14,24 @@ const protect = async (req, res, next) => {
             // Requesting "fullName" fails.
             // We select lowercase column and alias to camelCase for the app.
             const { rows } = await pool.query(
-                `SELECT id, fullname as "fullName", email, role, isapproved as "isApproved" 
-                 FROM users WHERE id = $1`,
+                `SELECT 
+                    u.id, 
+                    u.fullname as "fullName", 
+                    u.email, 
+                    u.role, 
+                    u.isapproved as "isApproved",
+                    s.status as "subscriptionStatus",
+                    p.name as "subscriptionPlan",
+                    s.enddate as "trialEndDate"
+                 FROM users u
+                 LEFT JOIN LATERAL (
+                    SELECT status, planid, enddate 
+                    FROM subscriptions 
+                    WHERE userid = u.id AND status = 'active' 
+                    ORDER BY enddate DESC LIMIT 1
+                 ) s ON true
+                 LEFT JOIN plans p ON s.planid = p.id
+                 WHERE u.id = $1`,
                 [decoded.id]
             );
 

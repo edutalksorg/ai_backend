@@ -5,10 +5,10 @@ const pool = require('../config/db');
 const subscriptionExpiryTask = cron.schedule('0 0 * * *', async () => {
     console.log('⏳ Running subscription expiry check...');
     try {
-        const [result] = await pool.query(
-            'UPDATE subscriptions SET status = "expired" WHERE endDate < NOW() AND status = "active"'
+        const result = await pool.query(
+            "UPDATE subscriptions SET status = 'expired' WHERE enddate < NOW() AND status = 'active'"
         );
-        console.log(`✅ Expired ${result.affectedRows} subscriptions.`);
+        console.log(`✅ Expired ${result.rowCount} subscriptions.`);
     } catch (error) {
         console.error('❌ Error in subscription expiry task:', error);
     }

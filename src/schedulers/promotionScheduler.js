@@ -8,7 +8,7 @@ const promotionTask = cron.schedule('20 10 * * *', async () => {
     console.log('⏳ Running daily promotional email task (10:00 AM)...');
     try {
         // Fetch only regular students (role = 'User')
-        const [users] = await pool.query('SELECT fullName, email FROM users WHERE role = "User"');
+        const { rows: users } = await pool.query("SELECT fullname as \"fullName\", email FROM users WHERE role = 'User'");
 
         console.log(`ℹ️  Targeting ${users.length} regular users for promotions.`);
 
