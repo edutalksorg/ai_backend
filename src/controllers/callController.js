@@ -86,7 +86,7 @@ const initiateCall = async (req, res) => {
         const caller = callerUsers[0];
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerid, calleeid, status, topicid, startedat) VALUES ($1, $2, $3, $4, NULL) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status, topicid) VALUES ($1, $2, $3, $4) RETURNING id',
             [callerId, calleeId, 'initiated', topicId || null]
         );
 
@@ -202,7 +202,8 @@ const respondToCall = async (req, res) => {
         const call = calls[0]; // lowercase props: callerid
         const status = accept ? 'accepted' : 'rejected';
 
-        await pool.query('UPDATE call_history SET status = $1, startedat = $2 WHERE id = $3', [status, accept ? new Date() : null, id]);
+        // Update startedat only if it's currently NULL or we want to reset it at acceptance
+        await pool.query('UPDATE call_history SET status = $1, startedat = NOW() WHERE id = $2', [status, id]);
 
         // Notify Caller
         // call.callerId -> call.callerid

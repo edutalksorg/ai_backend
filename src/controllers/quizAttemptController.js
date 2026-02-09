@@ -223,6 +223,8 @@ const getAttemptDetails = async (req, res) => {
         }
 
         const attempt = attempts[0];
+        // Ensure CamelCase keys for logic
+        attempt.passed = attempt.score >= (attempt.passingScore || 60);
 
         // Parse answers if string (JSONB is object)
         if (typeof attempt.answers === 'string') {
@@ -232,45 +234,6 @@ const getAttemptDetails = async (req, res) => {
         if (typeof attempt.questions === 'string') {
             try { attempt.questions = JSON.parse(attempt.questions); } catch (e) { }
         }
-
-        // Recalculate correctCount and totalQuestions for frontend display
-        let correctCount = 0;
-        const totalQuestions = attempt.questions?.length || 0;
-        const userAnswers = attempt.answers || [];
-
-        if (Array.isArray(attempt.questions) && Array.isArray(userAnswers)) {
-            attempt.questions.forEach((question, index) => {
-                let userAnswer = userAnswers.find(a => a.questionId === (question.id || question._id || String(index)));
-
-                if (!userAnswer) {
-                    userAnswer = userAnswers.find(a => String(a.questionId) === String(index));
-                }
-
-                if (userAnswer) {
-                    const submitted = String(userAnswer.selectedOption);
-                    const correctRef = question.correctAnswer;
-
-                    let isCorrect = false;
-
-                    if (Array.isArray(question.options) &&
-                        (typeof correctRef === 'number' || (!isNaN(Number(correctRef)) && String(Number(correctRef)) === String(correctRef)))) {
-                        const correctOptionValue = String(question.options[Number(correctRef)]);
-                        isCorrect = submitted === correctOptionValue;
-                    } else {
-                        isCorrect = submitted === String(correctRef);
-                    }
-
-                    if (isCorrect) {
-                        correctCount++;
-                    }
-                }
-            });
-        }
-
-        // Add calculated fields
-        attempt.correctCount = correctCount;
-        attempt.totalQuestions = totalQuestions;
-        attempt.passed = attempt.score >= (attempt.passingScore || 60);
 
         res.json({ success: true, data: attempt });
     } catch (error) {
