@@ -34,18 +34,16 @@ const submitQuiz = async (req, res) => {
         const userId = req.user.id;
         const { answers, attemptId } = req.body; // answers: [{ questionId, selectedOption }]
 
-        // 1. Get Quiz Questions (Correct Answers)
-        // questions is JSONB
-        const { rows: quizData } = await pool.query('SELECT questions FROM quizzes WHERE id = $1', [quizId]);
+        // 1. Get Quiz Questions and Passing Score
+        const { rows: quizData } = await pool.query('SELECT questions, passingScore FROM quizzes WHERE id = $1', [quizId]);
 
         if (quizData.length === 0) {
             return res.status(404).json({ message: 'Quiz not found' });
         }
 
-        // Postgres returns parsed JSON/Object for JSONB columns automatically
         let quizQuestions = quizData[0].questions;
-        // If for some reason it's a string (e.g. TEXT column), parse it.
-        // But for JSONB it is object.
+        const passingScore = quizData[0].passingscore || 60; // Default to 60 if not set
+
         if (typeof quizQuestions === 'string') {
             try { quizQuestions = JSON.parse(quizQuestions); } catch (e) { }
         }
@@ -54,24 +52,50 @@ const submitQuiz = async (req, res) => {
         let correctCount = 0;
         let totalQuestions = quizQuestions.length;
 
-        quizQuestions.forEach((question, index) => {
-            // Try matching by ID first
-            let userAnswer = answers.find(a => a.questionId === question.id);
+        console.log(`[Quiz Scoring] Quiz ID: ${quizId}, User ID: ${userId}, Total Questions: ${totalQuestions}`);
 
-            // Fallback: match by index if ID match failed (handles questions without IDs)
+        quizQuestions.forEach((question, index) => {
+            let userAnswer = answers.find(a => a.questionId === (question.id || question._id || String(index)));
+
+            // Fallback: match by index if ID match failed
             if (!userAnswer) {
                 userAnswer = answers.find(a => String(a.questionId) === String(index));
             }
 
-            if (userAnswer && userAnswer.selectedOption === question.correctAnswer) {
-                correctCount++;
+            if (userAnswer) {
+                const submitted = String(userAnswer.selectedOption);
+                const correctRef = question.correctAnswer;
+
+                let isCorrect = false;
+
+                // If correctAnswer is an index (number or numeric string) and options exist
+                if (Array.isArray(question.options) &&
+                    (typeof correctRef === 'number' || (!isNaN(Number(correctRef)) && String(Number(correctRef)) === String(correctRef)))) {
+                    const correctOptionValue = String(question.options[Number(correctRef)]);
+                    isCorrect = submitted === correctOptionValue;
+                    console.log(`  Q${index + 1}: Index-based. Correct: "${correctOptionValue}", Submitted: "${submitted}" -> ${isCorrect ? '✓' : '✗'}`);
+                } else {
+                    // Fallback to direct string comparison if it's not an index
+                    isCorrect = submitted === String(correctRef);
+                    console.log(`  Q${index + 1}: Text-based. Correct: "${correctRef}", Submitted: "${submitted}" -> ${isCorrect ? '✓' : '✗'}`);
+                }
+
+                if (isCorrect) {
+                    correctCount++;
+                }
+            } else {
+                console.log(`  Q${index + 1}: No answer submitted`);
             }
         });
 
-        const score = Math.round((correctCount / totalQuestions) * 100);
-        const passed = score >= 70; // Pass mark 70%
+        console.log(`[Quiz Scoring] Result: ${correctCount}/${totalQuestions} correct (${Math.round((correctCount / totalQuestions) * 100)}%)`);
+
+
+        const score = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+        const passed = score >= passingScore;
 
         // 3. Update Attempt or Create New (if simple submit without start)
+        let finalAttemptId = attemptId;
         if (attemptId) {
             await pool.query(
                 'UPDATE quiz_attempts SET score = $1, answers = $2, completedat = NOW() WHERE id = $3',
@@ -79,17 +103,47 @@ const submitQuiz = async (req, res) => {
             );
         } else {
             // Standalone submit
-            await pool.query(
-                'INSERT INTO quiz_attempts (quizid, userid, score, answers, startedat, completedat) VALUES ($1, $2, $3, $4, NOW(), NOW())',
+            const { rows: newAttempt } = await pool.query(
+                'INSERT INTO quiz_attempts (quizid, userid, score, answers, startedat, completedat) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id',
                 [quizId, userId, score, JSON.stringify(answers)]
             );
+            finalAttemptId = newAttempt[0].id;
+        }
+
+        // 4. Update User Progress if passed and topic exists
+        const topicId = quizData[0].topicid;
+        if (passed && topicId) {
+            try {
+                // Check if progress exists
+                const { rows: progress } = await pool.query(
+                    'SELECT id FROM user_progress WHERE userId = $1 AND topicId = $2',
+                    [userId, topicId]
+                );
+
+                if (progress.length > 0) {
+                    await pool.query(
+                        'UPDATE user_progress SET status = $1, completedAt = NOW(), progressPercentage = 100 WHERE id = $2',
+                        ['completed', progress[0].id]
+                    );
+                } else {
+                    await pool.query(
+                        'INSERT INTO user_progress (userId, topicId, status, completedAt, progressPercentage) VALUES ($1, $2, $3, NOW(), 100)',
+                        [userId, topicId, 'completed']
+                    );
+                }
+            } catch (err) {
+                console.error('Failed to update user progress:', err);
+                // Non-fatal, continue response
+            }
         }
 
         res.json({
             success: true,
             data: {
+                id: finalAttemptId,
                 score,
                 passed,
+                passingScore,
                 correctCount,
                 totalQuestions
             }
@@ -156,7 +210,8 @@ const getAttemptDetails = async (req, res) => {
         const userId = req.user.id; // Optional security check: ensure user owns attempt
 
         const { rows: attempts } = await pool.query(
-            `SELECT qa.*, q.title as "quizTitle", q.questions
+            `SELECT qa.id, qa.score, qa.answers, qa.completedat as "completedAt", 
+                    q.title as "quizTitle", q.questions, q.passingscore as "passingScore"
              FROM quiz_attempts qa
              JOIN quizzes q ON qa.quizid = q.id
              WHERE qa.id = $1 AND qa.userid = $2`,
@@ -168,6 +223,7 @@ const getAttemptDetails = async (req, res) => {
         }
 
         const attempt = attempts[0];
+
         // Parse answers if string (JSONB is object)
         if (typeof attempt.answers === 'string') {
             try { attempt.answers = JSON.parse(attempt.answers); } catch (e) { }
@@ -176,6 +232,45 @@ const getAttemptDetails = async (req, res) => {
         if (typeof attempt.questions === 'string') {
             try { attempt.questions = JSON.parse(attempt.questions); } catch (e) { }
         }
+
+        // Recalculate correctCount and totalQuestions for frontend display
+        let correctCount = 0;
+        const totalQuestions = attempt.questions?.length || 0;
+        const userAnswers = attempt.answers || [];
+
+        if (Array.isArray(attempt.questions) && Array.isArray(userAnswers)) {
+            attempt.questions.forEach((question, index) => {
+                let userAnswer = userAnswers.find(a => a.questionId === (question.id || question._id || String(index)));
+
+                if (!userAnswer) {
+                    userAnswer = userAnswers.find(a => String(a.questionId) === String(index));
+                }
+
+                if (userAnswer) {
+                    const submitted = String(userAnswer.selectedOption);
+                    const correctRef = question.correctAnswer;
+
+                    let isCorrect = false;
+
+                    if (Array.isArray(question.options) &&
+                        (typeof correctRef === 'number' || (!isNaN(Number(correctRef)) && String(Number(correctRef)) === String(correctRef)))) {
+                        const correctOptionValue = String(question.options[Number(correctRef)]);
+                        isCorrect = submitted === correctOptionValue;
+                    } else {
+                        isCorrect = submitted === String(correctRef);
+                    }
+
+                    if (isCorrect) {
+                        correctCount++;
+                    }
+                }
+            });
+        }
+
+        // Add calculated fields
+        attempt.correctCount = correctCount;
+        attempt.totalQuestions = totalQuestions;
+        attempt.passed = attempt.score >= (attempt.passingScore || 60);
 
         res.json({ success: true, data: attempt });
     } catch (error) {

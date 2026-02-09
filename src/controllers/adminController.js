@@ -8,11 +8,9 @@ const { sendVerificationEmail } = require('../services/emailService');
 // @access  Private (Admin/SuperAdmin)
 const getAllUsers = async (req, res) => {
     try {
-        // Postgres syntax
-        // ROW_NUMBER() works in PG
-        // User casing: u.fullName -> u."fullName"
-        // User casing: u.fullName -> u.fullname as "fullName"
-        const query = `
+        const requestingUserRole = req.user.role;
+
+        let query = `
             SELECT 
                 u.id, 
                 u.fullname as "fullName", 
@@ -38,6 +36,12 @@ const getAllUsers = async (req, res) => {
             ) s ON u.id = s."userId"
             LEFT JOIN plans p ON s."planId" = p.id
         `;
+
+        // Filter out SuperAdmins if the requester is not a SuperAdmin
+        if (requestingUserRole !== 'SuperAdmin') {
+            query += " WHERE u.role != 'SuperAdmin'";
+        }
+
         const { rows: users } = await pool.query(query);
         res.json({
             success: true,
@@ -284,10 +288,10 @@ const deleteCoupon = async (req, res) => {
 // @desc    Delete a user (SuperAdmin only)
 // @route   DELETE /api/v1/users/:id
 // @access  Private (SuperAdmin)
-const safeDelete = async (client, tableName, userId) => {
+const safeDelete = async (client, tableName, userId, columnName = 'userid') => {
     try {
         await client.query('SAVEPOINT safe_delete');
-        await client.query(`DELETE FROM ${tableName} WHERE userid = $1`, [userId]);
+        await client.query(`DELETE FROM ${tableName} WHERE ${columnName} = $1`, [userId]);
         await client.query('RELEASE SAVEPOINT safe_delete');
     } catch (error) {
         await client.query('ROLLBACK TO SAVEPOINT safe_delete');
@@ -319,19 +323,32 @@ const deleteUser = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        const userToDelete = users[0];
+
+        // Restrict deletion of Admin/SuperAdmin roles
+        if (userToDelete.role === 'Admin' || userToDelete.role === 'SuperAdmin') {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ message: 'Cannot delete Admin or SuperAdmin accounts' });
+        }
+
         // 1. Delete dependent relations (Cascading Delete Manually)
-        // Critical tables (should exist)
+        // Critical tables
         await client.query('DELETE FROM referrals WHERE referrerid = $1 OR referreduserid = $1', [userId]);
         await client.query('DELETE FROM call_history WHERE callerid = $1 OR calleeid = $1', [userId]);
         await client.query('DELETE FROM topics WHERE instructorid = $1', [userId]);
         await client.query('DELETE FROM transactions WHERE userid = $1', [userId]);
         await client.query('DELETE FROM subscriptions WHERE userid = $1', [userId]);
         await client.query('DELETE FROM coupon_usages WHERE userid = $1', [userId]);
+        await client.query('DELETE FROM user_permissions WHERE userId = $1', [userId]);
+        await client.query('DELETE FROM user_connections WHERE requester_id = $1 OR recipient_id = $1', [userId]);
 
         // Optional/Potential missing tables - use SAFEPOINT
         await safeDelete(client, 'user_progress', userId);
         await safeDelete(client, 'instructor_profiles', userId);
         await safeDelete(client, 'notifications', userId);
+        await safeDelete(client, 'pronunciation_paragraphs', userId, 'instructorid'); // For instructors
+        await safeDelete(client, 'quizzes', userId, 'instructorid'); // For instructors
+        await safeDelete(client, 'quiz_attempts', userId);
 
         // 2. Delete the user
         await client.query('DELETE FROM users WHERE id = $1', [userId]);
