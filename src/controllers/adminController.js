@@ -222,6 +222,7 @@ const getAllCoupons = async (req, res) => {
 const createCoupon = async (req, res) => {
     try {
         const { code, description, discountType, discountValue, expiryDate, status, applicableTo, maxTotalUsage, maxUsagePerUser, maxDiscountAmount, minimumPurchaseAmount } = req.body;
+        const upperCode = code ? code.toUpperCase() : null;
 
         // Postgres handles ISO strings.
         let formattedDate = expiryDate ? new Date(expiryDate) : null;
@@ -232,10 +233,10 @@ const createCoupon = async (req, res) => {
         const { rows: result } = await pool.query(
             `INSERT INTO coupons (code, description, discounttype, discountvalue, expirydate, status, applicableto, maxtotalusage, maxusageperuser, maxdiscountamount, minimumpurchaseamount) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-            [code, description, discountType, discountValue, formattedDate, status || 'Active', applicableTo || 'AllSubscriptions', maxTotalUsage || 1000, maxUsagePerUser || 1, maxDiscountAmount || 0, minimumPurchaseAmount || 0]
+            [upperCode, description, discountType, discountValue, formattedDate, status || 'Active', applicableTo || 'AllSubscriptions', maxTotalUsage || 1000, maxUsagePerUser || 1, maxDiscountAmount || 0, minimumPurchaseAmount || 0]
         );
 
-        res.status(201).json({ success: true, data: { id: result[0].id, code } });
+        res.status(201).json({ success: true, data: { id: result[0].id, code: upperCode } });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error: ' + error.message });
@@ -409,7 +410,7 @@ const validateCoupon = async (req, res) => {
     try {
         const { code, couponCode, purchaseAmount, amount, planId } = req.body;
         const userId = req.user.id;
-        const actualCode = code || couponCode;
+        const actualCode = (code || couponCode)?.toUpperCase();
         const actualAmount = purchaseAmount || amount;
 
         if (!actualCode) {

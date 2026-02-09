@@ -57,12 +57,13 @@ const registerUser = async (req, res) => {
                 console.log('Invalid referral code provided:', referralCode);
             }
         } else if (couponCode) {
+            const upperCouponCode = couponCode.toUpperCase();
             // Validate Coupon
-            const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1 AND status = \'Active\' AND (expiryDate IS NULL OR expiryDate > NOW())', [couponCode]);
+            const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1 AND status = \'Active\' AND (expiryDate IS NULL OR expiryDate > NOW())', [upperCouponCode]);
             if (coupons.length > 0) {
                 registrationMethod = 'coupon';
-                registrationCode = couponCode;
-                usedCouponCodeValue = couponCode;
+                registrationCode = upperCouponCode;
+                usedCouponCodeValue = upperCouponCode;
             } else {
                 return res.status(400).json({ message: 'Invalid or expired coupon code' });
             }

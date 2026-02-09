@@ -176,7 +176,8 @@ const subscribe = async (req, res) => {
         let couponId = null;
 
         if (couponCode) {
-            const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1 AND status = \'Active\'', [couponCode]);
+            const upperCouponCode = couponCode.toUpperCase();
+            const { rows: coupons } = await pool.query('SELECT * FROM coupons WHERE code = $1 AND status = \'Active\'', [upperCouponCode]);
             if (coupons.length > 0) {
                 const coupon = coupons[0];
                 couponId = coupon.id;
