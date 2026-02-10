@@ -483,6 +483,45 @@ const resendVerification = async (req, res) => {
     }
 };
 
+// @desc    Change Password (Authenticated)
+// @route   PUT /api/v1/auth/change-password
+// @access  Private
+const changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const userId = req.user.id;
+
+        // 1. Get user from DB
+        const { rows: users } = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        const user = users[0];
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // 2. Verify current password
+        const isMatch = await verifyPassword(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Incorrect current password' });
+        }
+
+        // 3. Hash new password
+        const hashedPassword = await hashPassword(newPassword);
+
+        // 4. Update password
+        await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+
+        res.status(200).json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Change password error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 module.exports = {
     registerUser,
     loginUser,
@@ -490,5 +529,6 @@ module.exports = {
     forgotPassword,
     resetPassword,
     verifyEmail,
-    resendVerification
+    resendVerification,
+    changePassword
 };
