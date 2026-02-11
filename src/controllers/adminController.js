@@ -9,6 +9,7 @@ const { sendVerificationEmail } = require('../services/emailService');
 const getAllUsers = async (req, res) => {
     try {
         const requestingUserRole = req.user.role;
+        const { search } = req.query;
 
         let query = `
             SELECT 
@@ -37,12 +38,26 @@ const getAllUsers = async (req, res) => {
             LEFT JOIN plans p ON s."planId" = p.id
         `;
 
+        let conditions = [];
+        let params = [];
+
         // Filter out SuperAdmins if the requester is not a SuperAdmin
         if (requestingUserRole !== 'SuperAdmin') {
-            query += " WHERE u.role != 'SuperAdmin'";
+            conditions.push("u.role != 'SuperAdmin'");
         }
 
-        const { rows: users } = await pool.query(query);
+        if (search) {
+            const searchTerm = `%${search}%`;
+            params.push(searchTerm);
+            const searchIdx = params.length;
+            conditions.push(`(u.fullname ILIKE $${searchIdx} OR u.email ILIKE $${searchIdx} OR u.phonenumber ILIKE $${searchIdx})`);
+        }
+
+        if (conditions.length > 0) {
+            query += " WHERE " + conditions.join(" AND ");
+        }
+
+        const { rows: users } = await pool.query(query, params);
         res.json({
             success: true,
             data: users,
