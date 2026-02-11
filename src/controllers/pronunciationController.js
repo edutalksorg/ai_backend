@@ -30,12 +30,27 @@ const getParagraphs = async (req, res) => {
         }
 
         const offset = (pageNumber - 1) * pageSize;
-        query += ` ORDER BY createdat ASC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
-        params.push(parseInt(pageSize), parseInt(offset));
+        const mainQuery = query + ` ORDER BY createdat ASC LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+        const mainParams = [...params, parseInt(pageSize), parseInt(offset)];
 
-        const { rows: paragraphs } = await pool.query(query, params);
-        console.log(`[DEBUG] getParagraphs found ${paragraphs.length} items:`, paragraphs.map(p => ({ id: p.id, title: p.title, published: p.isPublished })));
-        res.json({ success: true, data: paragraphs });
+        // Get total count for pagination
+        const countQuery = `SELECT COUNT(*) FROM (${query}) AS total`;
+        const { rows: countResult } = await pool.query(countQuery, params);
+        const totalCount = parseInt(countResult[0].count);
+        const totalPages = Math.ceil(totalCount / pageSize);
+
+        const { rows: paragraphs } = await pool.query(mainQuery, mainParams);
+
+        console.log(`[DEBUG] getParagraphs found ${paragraphs.length}/${totalCount} items. Page ${pageNumber}/${totalPages}`);
+
+        res.json({
+            success: true,
+            data: paragraphs,
+            totalCount,
+            totalPages,
+            currentPage: parseInt(pageNumber),
+            pageSize: parseInt(pageSize)
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error: ' + error.message });
