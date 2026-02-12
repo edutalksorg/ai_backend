@@ -4,8 +4,8 @@ const { sendPromotionalEmail } = require('../services/emailService');
 
 // Task to run every day at 10:00 AM
 // Cron format: minute hour day-of-month month day-of-week
-const promotionTask = cron.schedule('20 10 * * *', async () => {
-    console.log('⏳ Running daily promotional email task (10:00 AM)...');
+const promotionTask = cron.schedule('30 10 * * *', async () => {
+    console.log('⏳ Running daily promotional email task (10:25 AM)...');
     try {
         // Fetch only regular students (role = 'User')
         const { rows: users } = await pool.query("SELECT fullname as \"fullName\", email FROM users WHERE role = 'User'");

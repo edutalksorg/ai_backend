@@ -26,19 +26,18 @@ const sendVerificationEmail = async (email, fullName, token) => {
         const mailOptions = {
             from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
             to: email,
-            subject: `Confirm Your Email: ${shortToken} - EduTalks`,
-            text: `Hello ${fullName},\n\nWelcome to EduTalks! Please verify your account by clicking the link below or copying it into your browser:\n\n${verifyUrl}\n\nYour security code is: ${shortToken}\n\nThis link expires in 24 hours.\n\nBest regards,\nThe EduTalks Team`,
+            subject: `Welcome to EduTalks! 🚀 - Confirmation Email`,
+            text: `Hello ${fullName},\n\nWelcome to EduTalks! Please confirm your account by clicking the link below or copying it into your browser:\n\n${verifyUrl}\n\nYour security code is: ${shortToken}\n\nThis link expires in 24 hours.\n\nBest regards,\nThe EduTalks Team`,
             html: `
             <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; background-color: #f8fafc; border-radius: 16px;">
                 <div style="text-align: center; margin-bottom: 30px;">
                     <h1 style="color: #1e40af; font-size: 28px; margin-bottom: 10px;">EduTalks</h1>
-                    <p style="color: #64748b; font-size: 16px;">Verify your email address</p>
                 </div>
                 
                 <div style="background-color: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
                     <h2 style="color: #0f172a; font-size: 20px; margin-top: 0;">Hello ${fullName}! 👋</h2>
                     <p style="color: #334155; line-height: 1.6; font-size: 16px;">
-                        Welcome to EduTalks! To complete your registration and start mastering your English pronunciation, please verify your email address.
+                        Welcome to EduTalks! To complete your registration and start mastering your English pronunciation, please confirm your email address.
                     </p>
                     
                     <div style="text-align: center; margin: 40px 0;">
@@ -51,12 +50,12 @@ const sendVerificationEmail = async (email, fullName, token) => {
                                   font-weight: bold; 
                                   display: inline-block;
                                   box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.2);">
-                            Verify My Email
+                            Confirm My Email
                         </a>
                     </div>
 
                     <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; text-align: center;">
-                        <p style="color: #64748b; font-size: 14px; margin-bottom: 5px;">Your verification code is:</p>
+                        <p style="color: #64748b; font-size: 14px; margin-bottom: 5px;">Your security code is:</p>
                         <span style="font-family: monospace; font-size: 24px; font-weight: bold; color: #1e40af; letter-spacing: 4px;">${shortToken}</span>
                     </div>
 
@@ -91,11 +90,10 @@ const sendVerificationEmail = async (email, fullName, token) => {
 
 const sendPromotionalEmail = async (email, fullName) => {
     try {
-        const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
         const mailOptions = {
             from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
             to: email,
-            subject: `EduTalks Update - ${today}`,
+            subject: `✨ Unlock Your English Potential with EduTalks!`,
             html: `
             <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; background-color: #f8fafc; border-radius: 16px;">
                 <div style="text-align: center; margin-bottom: 30px;">
