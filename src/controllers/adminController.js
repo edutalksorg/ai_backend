@@ -9,7 +9,10 @@ const { sendVerificationEmail } = require('../services/emailService');
 const getAllUsers = async (req, res) => {
     try {
         const requestingUserRole = req.user.role;
-        const { search } = req.query;
+        const { search, dateFilter, startDate: customStart, endDate: customEnd, Page, PageSize } = req.query;
+
+        const limit = parseInt(PageSize) || 1000;
+        const offset = ((parseInt(Page) || 1) - 1) * limit;
 
         let query = `
             SELECT 
@@ -38,6 +41,8 @@ const getAllUsers = async (req, res) => {
             LEFT JOIN plans p ON s."planId" = p.id
         `;
 
+        let countQuery = `SELECT COUNT(*) FROM users u`;
+
         let conditions = [];
         let params = [];
 
@@ -53,14 +58,98 @@ const getAllUsers = async (req, res) => {
             conditions.push(`(u.fullname ILIKE $${searchIdx} OR u.email ILIKE $${searchIdx} OR u.phonenumber ILIKE $${searchIdx})`);
         }
 
-        if (conditions.length > 0) {
-            query += " WHERE " + conditions.join(" AND ");
+        if (dateFilter) {
+            const now = new Date();
+            let startDate;
+            let endDate = new Date();
+
+            switch (dateFilter) {
+                case 'today':
+                    startDate = new Date(now.setHours(0, 0, 0, 0));
+                    break;
+                case 'yesterday':
+                    startDate = new Date(now.setDate(now.getDate() - 1));
+                    startDate.setHours(0, 0, 0, 0);
+                    endDate = new Date(startDate);
+                    endDate.setHours(23, 59, 59, 999);
+                    break;
+                case 'last7days':
+                    startDate = new Date(now.setDate(now.getDate() - 7));
+                    startDate.setHours(0, 0, 0, 0);
+                    break;
+                case 'last30days':
+                    startDate = new Date(now.setDate(now.getDate() - 30));
+                    startDate.setHours(0, 0, 0, 0);
+                    break;
+                case 'custom':
+                    if (customStart) {
+                        startDate = new Date(customStart);
+                        startDate.setHours(0, 0, 0, 0);
+                    }
+                    if (customEnd) {
+                        endDate = new Date(customEnd);
+                        endDate.setHours(23, 59, 59, 999);
+                    } else if (startDate) {
+                        // Fallback to today if end date missing for custom
+                        endDate = new Date();
+                    }
+                    break;
+                case 'single':
+                    const dateToUse = customStart || customEnd; // Handle both just in case
+                    if (dateToUse) {
+                        startDate = new Date(dateToUse);
+                        startDate.setHours(0, 0, 0, 0);
+                        endDate = new Date(dateToUse);
+                        endDate.setHours(23, 59, 59, 999);
+                    }
+                    break;
+                default:
+                    startDate = null;
+            }
+
+            // Apply conditions based on determined range
+            if (startDate instanceof Date && !isNaN(startDate.getTime())) {
+                params.push(startDate);
+                conditions.push(`u.createdat >= $${params.length}`);
+            }
+
+            if (endDate instanceof Date && !isNaN(endDate.getTime())) {
+                // Only apply end filter if it's explicitly part of the selected range logic
+                const needsEndFilter = ['yesterday', 'today', 'last7days', 'last30days', 'single'].includes(dateFilter) ||
+                    (dateFilter === 'custom' && (customEnd || startDate));
+
+                if (needsEndFilter) {
+                    params.push(endDate);
+                    conditions.push(`u.createdat <= $${params.length}`);
+                }
+            }
         }
 
-        const { rows: users } = await pool.query(query, params);
+        if (conditions.length > 0) {
+            const whereClause = " WHERE " + conditions.join(" AND ");
+            query += whereClause;
+            countQuery += whereClause;
+        }
+
+        query += " ORDER BY u.createdat DESC";
+        query += ` LIMIT ${limit} OFFSET ${offset}`;
+
+        console.log('>>> Users Query:', query);
+        console.log('>>> Users Params:', params);
+
+        const [usersResult, countResult] = await Promise.all([
+            pool.query(query, params),
+            pool.query(countQuery, params)
+        ]);
+
+        const totalCount = parseInt(countResult.rows[0].count);
+
         res.json({
             success: true,
-            data: users,
+            data: usersResult.rows,
+            totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+            currentPage: parseInt(Page) || 1
         });
     } catch (error) {
         console.error(error);
