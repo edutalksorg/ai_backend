@@ -131,36 +131,14 @@ const registerUser = async (req, res) => {
                     const refereeReward = parseFloat(settings['referral_referee_reward_amount'] || 0);
 
                     if (isActive) {
-                        console.log(`💰 Applying rewards: Referrer +${referrerReward}, Referee +${refereeReward}`);
+                        console.log(`🔗 Recording pending referral for ${fullName} (Referrer: ${referrer.fullName})`);
 
-                        // 3. Update referrer's wallet
-                        if (referrerReward > 0) {
-                            await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [referrerReward, referrer.id]);
-
-                            // Log transaction for referrer
-                            await pool.query(
-                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
-                                [referrer.id, referrerReward, 'credit', 'completed', `Referral reward for inviting ${fullName}`]
-                            );
-                        }
-
-                        // 4. Update referee's wallet
-                        if (refereeReward > 0) {
-                            await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [refereeReward, userId]);
-
-                            // Log transaction for referee
-                            await pool.query(
-                                'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
-                                [userId, refereeReward, 'credit', 'completed', `Referral bonus for joining via ${referrer.fullName}`]
-                            );
-                        }
-
-                        // 5. Record referral
+                        // 5. Record referral (PENDING - Reward on First Payment)
                         await pool.query(
                             'INSERT INTO referrals (referrerId, referredUserId, referralCode, status, rewardAmount) VALUES ($1, $2, $3, $4, $5)',
-                            [referrer.id, userId, referralCode, 'completed', referrerReward]
+                            [referrer.id, userId, referralCode, 'pending', 0]
                         );
-                        console.log('✅ Referral rewards applied successfully.');
+                        console.log('✅ Referral recorded as pending. Reward awaits first payment.');
                     }
                 }
             } catch (referralError) {

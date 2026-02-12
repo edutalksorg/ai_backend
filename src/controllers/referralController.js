@@ -180,6 +180,14 @@ const getReferralSettings = async (req, res) => {
             }
         }
 
+        // Fetch Plans with referral percentages
+        const { rows: plans } = await pool.query('SELECT id, name, price, currency, billingCycle, referrerRewardPercentage, refereeRewardPercentage FROM plans WHERE isActive = TRUE ORDER BY price ASC');
+        responseData.plans = plans.map(p => ({
+            ...p,
+            referrerRewardPercentage: parseFloat(p.referrerrewardpercentage || 0),
+            refereeRewardPercentage: parseFloat(p.refereerewardpercentage || 0)
+        }));
+
         res.json({ success: true, data: responseData });
     } catch (error) {
         console.error(error);
@@ -192,9 +200,10 @@ const getReferralSettings = async (req, res) => {
 // @access  Private (Admin)
 const updateReferralSettings = async (req, res) => {
     try {
-        const updates = req.body;
+        const { plans, ...updates } = req.body;
         const queries = [];
 
+        // Update Global Settings
         for (const [feKey, dbKey] of Object.entries(SETTINGS_MAP)) {
             if (updates[feKey] !== undefined) {
                 const value = String(updates[feKey]);
@@ -206,6 +215,20 @@ const updateReferralSettings = async (req, res) => {
                         [dbKey, value]
                     )
                 );
+            }
+        }
+
+        // Update Plans if provided
+        if (plans && Array.isArray(plans)) {
+            for (const plan of plans) {
+                if (plan.id) {
+                    queries.push(
+                        pool.query(
+                            'UPDATE plans SET referrerRewardPercentage = $1, refereeRewardPercentage = $2 WHERE id = $3',
+                            [plan.referrerRewardPercentage || 0, plan.refereeRewardPercentage || 0, plan.id]
+                        )
+                    );
+                }
             }
         }
 

@@ -85,7 +85,7 @@ const verifyRazorpayPayment = async (req, res) => {
         if (pendingTx.length > 0) {
             console.log('✅ [Payment] Found pending transaction:', pendingTx[0].id);
             transactionId = pendingTx[0].id;
-            const originalOrderId = pendingTx[0].providertransactionid; // The Merchant Order ID (SUB_...)
+            const originalOrderId = pendingTx[0].providertransactionid || pendingTx[0].providerTransactionId; // The Merchant Order ID (SUB_...)
 
             // Increment Coupon Usage Count if a coupon was used for this order
             if (originalOrderId) {
@@ -135,6 +135,96 @@ const verifyRazorpayPayment = async (req, res) => {
                 'UPDATE subscriptions SET status = \'active\', paymentStatus = \'completed\' WHERE id = $1',
                 [sub.id]
             );
+
+            // --- Referral Reward Processing (Post-Payment) ---
+            try {
+                // 1. Fetch Plan Details to get percentages
+                // Note: using explicit lowercase aliasing to be safe with Postgres returns
+                const { rows: plans } = await pool.query('SELECT * FROM plans WHERE id = $1', [sub.planid || sub.planId]);
+
+                if (plans.length > 0) {
+                    const plan = plans[0];
+
+                    if (plan && parseFloat(plan.price) > 0) {
+                        console.log(`🔍 [Payment] Checking referral reward for plan: ${plan.name} (Price: ${plan.price})`);
+
+                        // 2. Check for Pending Referral
+                        // We query by referredUserId to find if THIS user was referred by someone
+                        // And handle potential case sensitivity in DB column matching by using lowercased key via helper if needed, 
+                        // but WHERE clause is safe.
+                        const { rows: referrals } = await pool.query(
+                            'SELECT * FROM referrals WHERE referredUserId = $1 AND status = \'pending\'',
+                            [userId]
+                        );
+
+                        if (referrals.length > 0) {
+                            const referral = referrals[0];
+                            const referrerId = referral.referrerid || referral.referrerId;
+
+                            console.log(`🔗 [Payment] Found pending referral from referrer: ${referrerId}. Processing reward...`);
+
+                            // Normalize percentages from potential DB casing
+                            const referrerRewardPercent = parseFloat(plan.referrerRewardPercentage || plan.referrerrewardpercentage || 0);
+                            const refereeRewardPercent = parseFloat(plan.refereeRewardPercentage || plan.refereerewardpercentage || 0);
+
+                            // Calculate Amounts
+                            const price = parseFloat(plan.price);
+                            const referrerAmount = (price * referrerRewardPercent) / 100;
+                            const refereeAmount = (price * refereeRewardPercent) / 100;
+
+                            console.log(`💰 [Payment] Reward Calculation:
+                               - Plan Price: ${price}
+                               - Referrer: ${referrerRewardPercent}% = ${referrerAmount}
+                               - Referee: ${refereeRewardPercent}% = ${refereeAmount}
+                            `);
+
+                            if (referrerAmount > 0) {
+                                console.log(`💳 [Payment] Crediting Referrer (${referrerId}) with ${referrerAmount}`);
+                                // Update Referrer Wallet
+                                await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [referrerAmount, referrerId]);
+
+                                // Log Transaction for Referrer
+                                await pool.query(
+                                    'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
+                                    [referrerId, referrerAmount, 'credit', 'completed', `Referral Percentage Reward (${referrerRewardPercent}%) from ${req.user?.fullName || 'User'}`]
+                                );
+                            } else {
+                                console.log('ℹ️ [Payment] Referrer amount is 0, skipping wallet update.');
+                            }
+
+                            if (refereeAmount > 0) {
+                                console.log(`💳 [Payment] Crediting Referee/User (${userId}) with ${refereeAmount}`);
+                                // Update Referee Wallet (Current User)
+                                await pool.query('UPDATE users SET walletBalance = walletBalance + $1 WHERE id = $2', [refereeAmount, userId]);
+
+                                // Log Transaction for Referee
+                                await pool.query(
+                                    'INSERT INTO transactions (userId, amount, type, status, description) VALUES ($1, $2, $3, $4, $5)',
+                                    [userId, refereeAmount, 'credit', 'completed', `Referral Bonus (${refereeRewardPercent}%) for subscribing to ${plan.name}`]
+                                );
+                            } else {
+                                console.log('ℹ️ [Payment] Referee amount is 0, skipping wallet update.');
+                            }
+
+                            // Mark Referral Completed
+                            await pool.query(
+                                'UPDATE referrals SET status = \'completed\', rewardAmount = $1 WHERE id = $2',
+                                [referrerAmount, referral.id]
+                            );
+                            console.log('✅ [Payment] Referral status updated to completed.');
+                        } else {
+                            console.log('ℹ️ [Payment] No pending referral found for this user.');
+                        }
+                    } else {
+                        console.log('ℹ️ [Payment] Plan price is 0 or invalid, skipping referral logic.');
+                    }
+                } else {
+                    console.log('ℹ️ [Payment] Plan details not found for subscription.');
+                }
+            } catch (refError) {
+                console.error('❌ [Payment] Failed to process referral reward:', refError);
+            }
+
 
             // --- Safe Switching: Cancel any previous active subscriptions ---
             try {

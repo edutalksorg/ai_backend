@@ -15,10 +15,21 @@ const createPlanTable = async () => {
       trialDays INT DEFAULT 0,
       isMostPopular BOOLEAN DEFAULT FALSE,
       marketingTagline VARCHAR(255),
+      referrerRewardPercentage DECIMAL(5, 2) DEFAULT 0,
+      refereeRewardPercentage DECIMAL(5, 2) DEFAULT 0,
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `;
   await pool.query(query);
+
+  // Add columns if they don't exist (migrations)
+  try {
+    await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS referrerRewardPercentage DECIMAL(5, 2) DEFAULT 0');
+    await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS refereeRewardPercentage DECIMAL(5, 2) DEFAULT 0');
+  } catch (error) {
+    console.warn('Error adding referral columns to plans table:', error.message);
+  }
 };
 
 module.exports = createPlanTable;
+

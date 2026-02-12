@@ -16,11 +16,11 @@ const getPlans = async (req, res) => {
 
 const createPlan = async (req, res) => {
     try {
-        const { name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline } = req.body;
+        const { name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline, referrerRewardPercentage, refereeRewardPercentage } = req.body;
 
         const { rows: result } = await pool.query(
-            'INSERT INTO plans (name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id',
-            [name, description, price, currency || 'INR', billingCycle, JSON.stringify(features || {}), isActive || true, displayOrder || 0, trialDays || 0, isMostPopular || false, marketingTagline || '']
+            'INSERT INTO plans (name, description, price, currency, billingCycle, features, isActive, displayOrder, trialDays, isMostPopular, marketingTagline, referrerRewardPercentage, refereeRewardPercentage) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id',
+            [name, description, price, currency || 'INR', billingCycle, JSON.stringify(features || {}), isActive || true, displayOrder || 0, trialDays || 0, isMostPopular || false, marketingTagline || '', referrerRewardPercentage || 0, refereeRewardPercentage || 0]
         );
 
         res.status(201).json({ success: true, data: { id: result[0].id, name } });
@@ -54,7 +54,9 @@ const updatePlan = async (req, res) => {
             displayOrder: 'displayOrder',
             trialDays: 'trialDays',
             isMostPopular: 'isMostPopular',
-            marketingTagline: 'marketingTagline'
+            marketingTagline: 'marketingTagline',
+            referrerRewardPercentage: 'referrerRewardPercentage',
+            refereeRewardPercentage: 'refereeRewardPercentage'
         };
 
         // Start index at 1

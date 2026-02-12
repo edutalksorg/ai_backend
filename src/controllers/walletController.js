@@ -74,11 +74,23 @@ const withdraw = async (req, res) => {
         const { amount, bankDetails } = req.body;
         const userId = req.user.id;
 
+        if (amount < 500) {
+            return res.status(400).json({ message: 'Minimum withdrawal amount is 500 INR' });
+        }
+
         const { rows: user } = await pool.query('SELECT walletBalance as "walletBalance" FROM users WHERE id = $1', [userId]);
         const currentBalance = parseFloat(user[0]?.walletBalance || 0);
 
-        if (amount > currentBalance) {
-            return res.status(400).json({ message: 'Insufficient funds' });
+        // Calculate frozen amount (pending withdrawals)
+        const { rows: frozen } = await pool.query(
+            "SELECT SUM(amount) as \"frozen\" FROM transactions WHERE userId = $1 AND type = 'withdrawal' AND status IN ('pending', 'initiated')",
+            [userId]
+        );
+        const frozenAmount = parseFloat(frozen[0]?.frozen || 0);
+        const availableBalance = currentBalance - frozenAmount;
+
+        if (amount > availableBalance) {
+            return res.status(400).json({ message: 'Insufficient available funds (check pending withdrawals)' });
         }
 
         // Postgres handles JSON stringification automatically for JSON columns if object passed?
@@ -86,7 +98,7 @@ const withdraw = async (req, res) => {
         // But keeping JSON.stringify is also safe if column is JSONB.
         await pool.query(
             'INSERT INTO transactions (userId, amount, type, description, status, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-            [userId, amount, 'withdrawal', 'Withdrawal Request', 'pending', bankDetails] // Removed JSON.stringify
+            [userId, amount, 'withdrawal', 'Withdrawal Request', 'pending', bankDetails]
         );
 
         res.json({ success: true, message: 'Withdrawal request submitted' });
