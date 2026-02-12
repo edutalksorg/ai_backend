@@ -185,6 +185,10 @@ router.get('/admin/calls', protect, authorize('Admin', 'SuperAdmin'), (req, res,
     const { getAllCalls } = require('../controllers/callController');
     getAllCalls(req, res, next);
 });
+router.delete('/admin/calls/:id', protect, authorize('SuperAdmin'), (req, res, next) => {
+    const { adminDeleteCall } = require('../controllers/callController');
+    adminDeleteCall(req, res, next);
+});
 
 // Coupon routes
 // Coupon routes

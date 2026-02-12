@@ -157,7 +157,7 @@ const initiateRandomCall = async (req, res) => {
         }
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerid, calleeid, status, startedat) VALUES ($1, $2, $3, NULL) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status) VALUES ($1, $2, $3) RETURNING id',
             [callerId, callee.id, 'initiated']
         );
 
@@ -256,13 +256,13 @@ const getCallHistory = async (req, res) => {
         const userId = req.user.id;
         const { rows: history } = await pool.query(
             `SELECT ch.id, ch.status, ch.channelname as "channelName", ch.durationseconds as "durationSeconds", 
-                    ch.startedat as "startedAt", ch.endedat as "endedAt", ch.rating, ch.recording_url as "recordingUrl",
+                    ch.startedat as "startedAt", ch.endedat as "endedAt", ch.created_at as "createdAt", ch.rating, ch.recording_url as "recordingUrl",
                     u.fullname as "otherUserName", 
                     CASE WHEN ch.callerid = $1 THEN FALSE ELSE TRUE END as "isIncoming"
              FROM call_history ch 
              LEFT JOIN users u ON (ch.callerid = u.id OR ch.calleeid = u.id) AND u.id != $2
              WHERE ch.callerid = $3 OR ch.calleeid = $4 
-             ORDER BY ch.startedat DESC`,
+             ORDER BY COALESCE(ch.startedat, ch.created_at) DESC`,
             [userId, userId, userId, userId]
         );
         res.json({ success: true, data: history });
@@ -353,6 +353,7 @@ const getAllCalls = async (req, res) => {
                 u1.fullname as "callerName", 
                 u2.fullname as "calleeName", 
                 ch.startedat as "startedAt", 
+                ch.created_at as "createdAt", 
                 ch.durationseconds as "durationSeconds", 
                 ch.status, 
                 ch.recording_url as "recordingUrl"
@@ -374,7 +375,7 @@ const getAllCalls = async (req, res) => {
             queryParams.push(`%${search}%`);
         }
 
-        query += ` ORDER BY ch.startedat DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+        query += ` ORDER BY COALESCE(ch.startedat, ch.created_at) DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
         queryParams.push(limit, offset);
 
         const { rows } = await pool.query(query, queryParams);
@@ -382,6 +383,47 @@ const getAllCalls = async (req, res) => {
     } catch (error) {
         console.error('Error fetching all calls:', error);
         res.status(500).json({ message: 'Error fetching call records' });
+    }
+};
+
+// @desc    Delete call record (Admin)
+// @route   DELETE /api/v1/admin/calls/:id
+// @access  Private/SuperAdmin
+const adminDeleteCall = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const fs = require('fs');
+        const path = require('path');
+
+        // 1. Get recording URL to delete file
+        const { rows } = await pool.query('SELECT recording_url FROM call_history WHERE id = $1', [id]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Call record not found' });
+        }
+
+        const recordingUrl = rows[0].recording_url;
+
+        // 2. Delete file if exists
+        if (recordingUrl) {
+            const filePath = path.join(__dirname, '../../', recordingUrl);
+            if (fs.existsSync(filePath)) {
+                try {
+                    fs.unlinkSync(filePath);
+                    console.log(`Deleted recording file: ${filePath}`);
+                } catch (err) {
+                    console.error(`Error deleting file ${filePath}:`, err);
+                }
+            }
+        }
+
+        // 3. Delete from DB
+        await pool.query('DELETE FROM call_history WHERE id = $1', [id]);
+
+        res.status(200).json({ success: true, message: 'Call record deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting call:', error);
+        res.status(500).json({ message: 'Error deleting call record' });
     }
 };
 
@@ -395,5 +437,6 @@ module.exports = {
     getCallHistory,
     rateCall,
     uploadRecording,
-    getAllCalls
+    getAllCalls,
+    adminDeleteCall
 };

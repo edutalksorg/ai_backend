@@ -9,8 +9,9 @@ const createCallHistoryTable = async () => {
       channelName VARCHAR(255),
       status VARCHAR(50) DEFAULT 'ringing' CHECK (status IN ('initiated', 'ringing', 'accepted', 'rejected', 'completed', 'missed', 'declined', 'failed', 'busy')),
       durationSeconds INT DEFAULT 0,
-      startedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      startedAt TIMESTAMP,
       endedAt TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       rating INT DEFAULT NULL,
       topicId INT DEFAULT NULL,
       FOREIGN KEY (callerId) REFERENCES users(id),
@@ -24,6 +25,9 @@ const createCallHistoryTable = async () => {
   try {
     await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS topicId INT REFERENCES topics(id)');
     await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS recording_url TEXT');
+    await pool.query('ALTER TABLE call_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
+    // For existing records, if startedAt exists, use it as created_at
+    await pool.query('UPDATE call_history SET created_at = startedAt WHERE created_at IS NULL AND startedAt IS NOT NULL');
   } catch (e) {
     console.error('Migration failed for call_history columns:', e.message);
   }
