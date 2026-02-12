@@ -1,3 +1,4 @@
+require('dotenv').config();
 console.log('\n\n##############################################');
 console.log('🚀 BACKEND RESTARTED - VERSION 2.4 (PLAIN TEXT + UNIQUE SUBJECT)');
 console.log('##############################################\n');
@@ -6,7 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-require('dotenv').config();
+// Removed duplicate require
 
 const initDb = require('./db/init');
 const routes = require('./routes');
