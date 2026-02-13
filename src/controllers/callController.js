@@ -86,7 +86,7 @@ const initiateCall = async (req, res) => {
         const caller = callerUsers[0];
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerid, calleeid, status, topicid) VALUES ($1, $2, $3, $4) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status, topicid, startedat) VALUES ($1, $2, $3, $4, NULL) RETURNING id',
             [callerId, calleeId, 'initiated', topicId || null]
         );
 
@@ -157,7 +157,7 @@ const initiateRandomCall = async (req, res) => {
         }
 
         const { rows: result } = await pool.query(
-            'INSERT INTO call_history (callerid, calleeid, status) VALUES ($1, $2, $3) RETURNING id',
+            'INSERT INTO call_history (callerid, calleeid, status, startedat) VALUES ($1, $2, $3, NULL) RETURNING id',
             [callerId, callee.id, 'initiated']
         );
 
@@ -238,7 +238,14 @@ const endCall = async (req, res) => {
         const endTime = new Date();
         const durationSeconds = call.startedat ? Math.ceil((endTime - new Date(call.startedat)) / 1000) : 0;
 
-        await pool.query('UPDATE call_history SET status = \'completed\', endedat = $1, durationseconds = $2 WHERE id = $3', [endTime, durationSeconds, id]);
+        let newStatus = 'completed';
+        if (!call.startedat) {
+            // Call never started (callee didn't accept)
+            // If caller is ending it, it's a cancellation/missed call
+            newStatus = 'missed';
+        }
+
+        await pool.query('UPDATE call_history SET status = $1, endedat = $2, durationseconds = $3 WHERE id = $4', [newStatus, endTime, durationSeconds, id]);
 
         sendToUser(otherUserId, 'CallEnded', { callId: id, reason });
         res.json({ success: true, message: 'Call ended' });
