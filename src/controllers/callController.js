@@ -236,7 +236,7 @@ const endCall = async (req, res) => {
         // callerid, calleeid lowercase
         const otherUserId = call.callerid === userId ? call.calleeid : call.callerid;
         const endTime = new Date();
-        const durationSeconds = call.startedat ? Math.floor((endTime - new Date(call.startedat)) / 1000) : 0;
+        const durationSeconds = call.startedat ? Math.ceil((endTime - new Date(call.startedat)) / 1000) : 0;
 
         await pool.query('UPDATE call_history SET status = \'completed\', endedat = $1, durationseconds = $2 WHERE id = $3', [endTime, durationSeconds, id]);
 
