@@ -11,7 +11,12 @@ const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/e
 const registerUser = async (req, res) => {
     console.log('📝 Registering user:', req.body.email);
     try {
-        const { fullName, email, password, role, phoneNumber, referralCode, couponCode } = req.body;
+        const { fullName: bodyFullName, name, email, password, role, phoneNumber, referralCode, couponCode } = req.body;
+        const fullName = bodyFullName || name;
+
+        if (!fullName) {
+            return res.status(400).json({ message: 'Full name is required' });
+        }
 
         const { rows: userExists } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
@@ -168,7 +173,12 @@ const registerUser = async (req, res) => {
 // @access  Public
 const loginUser = async (req, res) => {
     try {
-        const { identifier, password } = req.body;
+        const { identifier: bodyIdentifier, email, password } = req.body;
+        const identifier = bodyIdentifier || email;
+
+        if (!identifier) {
+            return res.status(400).json({ message: 'Email or identifier is required' });
+        }
 
         // select * returns lowercase columns
         const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [identifier]);

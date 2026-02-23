@@ -11,6 +11,8 @@ const morgan = require('morgan');
 
 const initDb = require('./db/init');
 const routes = require('./routes');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 const { subscriptionExpiryTask } = require('./schedulers/subscriptionScheduler');
 const { promotionTask } = require('./schedulers/promotionScheduler');
 const startTrialExpirationJob = require('./jobs/trialExpirationJob');
@@ -47,13 +49,18 @@ app.use(helmet({
         },
     },
 }));
-const allowedOrigins = process.env.ALLOWED_ORIGINS
+const envOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : [
-        'http://localhost:3000',
-        'http://localhost:5173',
-        'https://d1ls14uofwgojt.cloudfront.net'
-    ];
+    : [];
+
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5000',
+    'http://localhost:5173',
+    'https://d1ls14uofwgojt.cloudfront.net',
+    process.env.BACKEND_URL,
+    ...envOrigins
+].filter(Boolean);
 console.log(`📡 [CONFIG] Allowed Origins: ${allowedOrigins.join(', ')}`);
 
 app.use(cors({
@@ -89,6 +96,7 @@ initDb();
 
 // Routes
 app.use('/api/v1', routes);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.get('/', (req, res) => {
     res.json({ message: 'AI Pronunciation Backend API is running' });

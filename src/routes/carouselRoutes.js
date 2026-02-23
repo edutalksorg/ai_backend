@@ -25,10 +25,53 @@ const {
 } = require('../controllers/carouselController');
 
 // Public/User route
-router.get('/', protect, getCarouselItems); // Or maybe public? Dashboard is protected usually.
+/**
+ * @swagger
+ * tags:
+ *   name: Carousel
+ *   description: Home page carousel image management
+ */
 
-// Admin routes
+/**
+ * @swagger
+ * /carousel:
+ *   get:
+ *     summary: Get all active carousel items
+ *     tags: [Carousel]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of carousel items
+ */
+router.get('/', protect, getCarouselItems);
+
+/**
+ * @swagger
+ * /carousel/admin:
+ *   get:
+ *     summary: Get all carousel items for admin management
+ *     tags: [Carousel]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all carousel items
+ */
 router.get('/admin', protect, authorize('Admin', 'SuperAdmin'), getAllCarouselItemsAdmin);
+
+/**
+ * @swagger
+ * /carousel:
+ *   post:
+ *     summary: Create new carousel item
+ *     tags: [Carousel]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       201:
+ *         description: Item created
+ */
 router.post('/', protect, authorize('Admin', 'SuperAdmin'), upload.single('image'), createCarouselItem);
 router.put('/:id', protect, authorize('Admin', 'SuperAdmin'), upload.single('image'), updateCarouselItem);
 router.delete('/:id', protect, authorize('Admin', 'SuperAdmin'), deleteCarouselItem);

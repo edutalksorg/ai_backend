@@ -13,12 +13,74 @@ const {
 } = require('../controllers/subscriptionController');
 const { protect, authorize } = require('../middlewares/auth');
 
-// Public
+/**
+ * @swagger
+ * tags:
+ *   name: Subscriptions
+ *   description: Subscription plan and user subscription management
+ */
+
+/**
+ * @swagger
+ * /subscriptions/plans:
+ *   get:
+ *     summary: Get all subscription plans
+ *     tags: [Subscriptions]
+ *     responses:
+ *       200:
+ *         description: List of plans
+ */
 router.get('/plans', getPlans);
 
-// Protected
+/**
+ * @swagger
+ * /subscriptions/subscribe:
+ *   post:
+ *     summary: Subscribe to a plan
+ *     tags: [Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               planId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Subscription initiated
+ */
 router.post('/subscribe', protect, subscribe);
+
+/**
+ * @swagger
+ * /subscriptions/cancel:
+ *   post:
+ *     summary: Cancel current subscription
+ *     tags: [Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Subscription cancelled
+ */
 router.post('/cancel', protect, cancelSubscription);
+
+/**
+ * @swagger
+ * /subscriptions/current:
+ *   get:
+ *     summary: Get current user subscription
+ *     tags: [Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current subscription details
+ */
 router.get('/current', protect, getCurrentSubscription);
 
 // Admin
